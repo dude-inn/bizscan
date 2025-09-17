@@ -9,7 +9,7 @@ from scraping.extractors import (
     extract_legal_flags, extract_licenses
 )
 from scraping.validators import validate_company_data
-from scraping.normalize import normalize_date
+from scraping.normalize import normalize_date, normalize_digits
 from core.logger import setup_logging
 
 log = setup_logging()
@@ -57,6 +57,14 @@ async def parse_company_html(html: str, url: Optional[str] = None) -> CompanyFul
         data.okved_main = basic_info.get('okved_main')
         data.msp_status = basic_info.get('msp_status')
         data.tax_authority = basic_info.get('tax_authority')
+
+        # Жёсткая нормализация числовых идентификаторов до валидной длины
+        if data.inn:
+            data.inn = normalize_digits(data.inn)[:12]  # ИНН 10/12, не больше 12
+        if data.kpp:
+            data.kpp = normalize_digits(data.kpp)[:9]   # КПП строго 9
+        if data.ogrn:
+            data.ogrn = normalize_digits(data.ogrn)[:15]  # ОГРН 13/15, не больше 15
 
         # Извлекаем коды статистики
         data.stats_codes = extract_stats_codes(soup)

@@ -8,6 +8,8 @@ from core.logger import setup_logging
 
 log = setup_logging()
 
+MAX_LEN = 300
+
 # Загружаем конфигурацию лейблов
 LABELS_CONFIG = None
 def load_labels_config():
@@ -64,24 +66,58 @@ def _extract_value_from_element(element: Tag, label: str) -> Optional[str]:
     if not element:
         return None
     
+    # 1) Сначала пробуем семантические пары dt/dd
+    if element.name in ("dt", "dd") or element.find_parent(["dl"]):
+        # если это dt — смотрим следующий dd; если dd — берем его текст
+        if element.name == "dt":
+            dd = element.find_next_sibling("dd")
+            if dd:
+                text = (dd.get_text(strip=True) or "").strip()
+                if text and text != label:
+                    return text[:MAX_LEN]
+        if element.name == "dd":
+            text = (element.get_text(strip=True) or "").strip()
+            if text and text != label:
+                return text[:MAX_LEN]
+
+    # 2) Табличные заголовки th/td
+    if element.name in ("th", "td") or element.find_parent(["table"]):
+        # попробуем пройти по строке
+        tr = element if element.name == "tr" else element.find_parent("tr")
+        if tr:
+            cells = tr.find_all(["th", "td"])
+            # найти ячейку после лейбла
+            for i, c in enumerate(cells):
+                if label.lower() in (c.get_text(" ", strip=True) or "").lower():
+                    if i + 1 < len(cells):
+                        text = (cells[i + 1].get_text(" ", strip=True) or "").strip()
+                        if text and text != label:
+                            return text[:MAX_LEN]
+        # если не нашли по строке — просто соседний td/следующие ячейки
+        nxt = element.find_next_sibling(["td", "th"]) if isinstance(element, Tag) else None
+        if nxt:
+            text = (nxt.get_text(" ", strip=True) or "").strip()
+            if text and text != label:
+                return text[:MAX_LEN]
+
     # Ищем в следующих элементах
     current = element.next_sibling
     while current:
         if isinstance(current, NavigableString):
-            text = current.strip()
+            text = (current.strip() or "").strip()
             if text and text != label:
-                return text
+                return text[:MAX_LEN]
         elif isinstance(current, Tag):
-            text = current.get_text(strip=True)
+            text = (current.get_text(strip=True) or "").strip()
             if text and text != label:
-                return text
+                return text[:MAX_LEN]
         current = current.next_sibling
     
     # Ищем в дочерних элементах
     for child in element.find_all(['span', 'div', 'td', 'li']):
-        text = child.get_text(strip=True)
+        text = (child.get_text(strip=True) or "").strip()
         if text and text != label and len(text) > len(label):
-            return text
+            return text[:MAX_LEN]
     
     return None
 

@@ -4,35 +4,55 @@ from domain.models import CompanyFull
 from settings import BRAND_NAME, BRAND_LINK, DATE_FORMAT
 from core.logger import setup_logging
 from datetime import datetime
+from pathlib import Path
 from fpdf import FPDF
 import re
 
 log = setup_logging()
 
+# Папка со шрифтами DejaVu (должны лежать: DejaVuSansCondensed.ttf, DejaVuSansCondensed-Bold.ttf)
+FONTS_DIR = Path(__file__).resolve().parents[1] / "assets" / "fonts"
+
+
+def _ensure_fonts(pdf: "FPDF") -> None:
+    """Регистрирует Unicode‑шрифты DejaVu в экземпляре FPDF.
+
+    Требуются файлы:
+    - DejaVuSansCondensed.ttf
+    - DejaVuSansCondensed-Bold.ttf
+    (опционально) DejaVuSansCondensed-Oblique.ttf — если нужен курсив
+    """
+    pdf.add_font("DejaVu", "", str(FONTS_DIR / "DejaVuSansCondensed.ttf"), uni=True)
+    pdf.add_font("DejaVu", "B", str(FONTS_DIR / "DejaVuSansCondensed-Bold.ttf"), uni=True)
+    # Курсив подключаем только если ttf реально присутствует и используется где-то
+    # pdf.add_font("DejaVu", "I", str(FONTS_DIR / "DejaVuSansCondensed-Oblique.ttf"), uni=True)
+
+
+def _set_font(pdf: "FPDF", style: str = "", size: int = 12) -> None:
+    """Безопасная установка шрифта DejaVu.
+
+    При отсутствии ttf-файлов генерируем исключение, чтобы вызывающий код
+    мог отправить текстовый отчёт вместо PDF (graceful fallback).
+    """
+    try:
+        _ensure_fonts(pdf)
+        # Не используем курсив, пока нет Oblique-ttf
+        style = "B" if style == "B" else ""
+        pdf.set_font("DejaVu", style, size)
+    except Exception as e:
+        log.warning("PDF: Unicode font not available, falling back to plain text", exc_info=e)
+        raise
+
 class PDFReport(FPDF):
     def __init__(self):
         super().__init__()
         self.set_auto_page_break(auto=True, margin=15)
-        
-        # Используем встроенные Unicode шрифты fpdf2
-        try:
-            # fpdf2 имеет встроенные Unicode шрифты
-            self.add_font('DejaVu', '', 'DejaVuSansCondensed.ttf', uni=True)
-            self.add_font('DejaVu', 'B', 'DejaVuSansCondensed-Bold.ttf', uni=True)
-            self.add_font('DejaVu', 'I', 'DejaVuSansCondensed-Oblique.ttf', uni=True)
-            self.unicode_font = 'DejaVu'
-            log.debug("PDF: Built-in Unicode font DejaVu loaded successfully")
-        except Exception as e:
-            log.warning("PDF: Failed to load built-in DejaVu font, using Helvetica with transliteration", error=str(e))
-            # Fallback: используем Helvetica с транслитерацией
-            self.unicode_font = 'Helvetica'
-        
-        # Добавляем страницу после инициализации шрифта
+        # Страницу добавим сразу; шрифт выставляем вызовами _set_font в методах
         self.add_page()
         
     def header(self):
         # Логотип и заголовок
-        self.set_font(self.unicode_font, 'B', 16)
+        _set_font(self, 'B', 16)
         self.set_text_color(37, 99, 235)  # Синий цвет
         self.cell(0, 10, BRAND_NAME, 0, 1, 'C')
         
@@ -44,43 +64,32 @@ class PDFReport(FPDF):
     
     def footer(self):
         self.set_y(-15)
-        self.set_font(self.unicode_font, 'I', 8)
+        # Не используем курсив, чтобы не требовать Oblique-ttf
+        _set_font(self, '', 8)
         self.set_text_color(128, 128, 128)
-        if self.unicode_font == 'Helvetica':
-            footer_text = f'Stranitsa {self.page_no()}'
-        else:
-            footer_text = f'Страница {self.page_no()}'
+        footer_text = f'Страница {self.page_no()}'
         self.cell(0, 10, footer_text, 0, 0, 'C')
     
     def add_section_title(self, title: str, emoji: str = ""):
         self.ln(5)
-        self.set_font(self.unicode_font, 'B', 14)
+        _set_font(self, 'B', 14)
         self.set_text_color(30, 64, 175)  # Темно-синий
-        # Используем оригинальный текст для Unicode шрифта или транслитерацию для Helvetica
-        if self.unicode_font == 'Helvetica':
-            title_text = sanitize_text(title)
-        else:
-            title_text = title
+        title_text = title
         self.cell(0, 8, title_text, 0, 1)
         self.ln(2)
     
     def add_field(self, label: str, value: str):
         if not value:
             return
-            
-        # Используем оригинальный текст для Unicode шрифта или транслитерацию для Helvetica
-        if self.unicode_font == 'Helvetica':
-            label_text = sanitize_text(label)
-            value_text = sanitize_text(value)
-        else:
-            label_text = label
-            value_text = value
-            
-        self.set_font(self.unicode_font, 'B', 10)
+        
+        label_text = label
+        value_text = value
+        
+        _set_font(self, 'B', 10)
         self.set_text_color(55, 65, 81)  # Серый
         self.cell(40, 6, f"{label_text}:", 0, 0)
         
-        self.set_font(self.unicode_font, '', 10)
+        _set_font(self, '', 10)
         self.set_text_color(0, 0, 0)  # Черный
         # Переносим длинные значения
         if len(value_text) > 50:
@@ -89,7 +98,7 @@ class PDFReport(FPDF):
             self.cell(0, 6, value_text, 0, 1)
     
     def add_locked_field(self, text: str):
-        self.set_font(self.unicode_font, 'I', 9)
+        _set_font(self, '', 9)
         self.set_text_color(156, 163, 175)  # Светло-серый
         self.cell(0, 5, f"[ЗАБЛОКИРОВАНО] {text}", 0, 1)
 
@@ -136,7 +145,7 @@ def generate_pdf(company: CompanyFull, mode: Literal["free", "full"]) -> bytes:
     """
     Генерирует PDF отчет для компании используя fpdf2
     """
-    log.info("PDF: start generate_pdf", mode=mode, company_name=company.short_name)
+    log.info("PDF start", mode=mode, company_name=company.short_name)
     log.debug("PDF: company data", 
               inn=company.inn, 
               ogrn=company.ogrn, 
@@ -145,14 +154,13 @@ def generate_pdf(company: CompanyFull, mode: Literal["free", "full"]) -> bytes:
               founders_count=len(company.founders))
     
     pdf = PDFReport()
+    # Проверим доступность шрифтов сразу, чтобы при их отсутствии отдать управление вызывающему коду
+    _set_font(pdf, 'B', 20)
     
     # Заголовок отчета
-    pdf.set_font(pdf.unicode_font, 'B', 20)
+    _set_font(pdf, 'B', 20)
     pdf.set_text_color(30, 64, 175)
-    if pdf.unicode_font == 'Helvetica':
-        title = f"{sanitize_text(BRAND_NAME)}: {'Besplatnyy' if mode == 'free' else 'Polnyy'} otchet"
-    else:
-        title = f"{BRAND_NAME}: {'Бесплатный' if mode == 'free' else 'Полный'} отчёт"
+    title = f"{BRAND_NAME}: {'Бесплатный' if mode == 'free' else 'Полный'} отчёт"
     pdf.cell(0, 15, title, 0, 1, 'C')
     
     # Информация о компании
@@ -180,10 +188,10 @@ def generate_pdf(company: CompanyFull, mode: Literal["free", "full"]) -> bytes:
             if mode == "free":
                 pdf.add_locked_field(f"Дополнительные виды: {len(company.okved_additional)} шт. — доступно в платном отчёте")
             else:
-                pdf.set_font(pdf.unicode_font, 'B', 10)
+                _set_font(pdf, 'B', 10)
                 pdf.cell(0, 6, "Дополнительные виды деятельности:", 0, 1)
                 for okved in company.okved_additional[:10]:
-                    pdf.set_font(pdf.unicode_font, '', 9)
+                    _set_font(pdf, '', 9)
                     pdf.cell(0, 5, f"• {okved}", 0, 1)
                 if len(company.okved_additional) > 10:
                     pdf.cell(0, 5, f"... и еще {len(company.okved_additional) - 10}", 0, 1)
@@ -198,10 +206,10 @@ def generate_pdf(company: CompanyFull, mode: Literal["free", "full"]) -> bytes:
             if mode == "free":
                 pdf.add_locked_field(f"Коды статистики: {len(company.stats_codes)} шт. — доступно в платном отчёте")
             else:
-                pdf.set_font(pdf.unicode_font, 'B', 10)
+                _set_font(pdf, 'B', 10)
                 pdf.cell(0, 6, "Коды статистики:", 0, 1)
                 for code, value in company.stats_codes.items():
-                    pdf.set_font(pdf.unicode_font, '', 9)
+                    _set_font(pdf, '', 9)
                     pdf.cell(0, 5, f"• {code}: {value}", 0, 1)
     
     # Контакты
@@ -212,10 +220,10 @@ def generate_pdf(company: CompanyFull, mode: Literal["free", "full"]) -> bytes:
                 if mode == "free":
                     pdf.add_locked_field(f"{contact_type.title()}: {len(values)} контактов — доступно в платном отчёте")
                 else:
-                    pdf.set_font(pdf.unicode_font, 'B', 10)
+                    _set_font(pdf, 'B', 10)
                     pdf.cell(0, 6, f"{contact_type.title()}:", 0, 1)
                     for value in values:
-                        pdf.set_font(pdf.unicode_font, '', 9)
+                        _set_font(pdf, '', 9)
                         pdf.cell(0, 5, f"• {value}", 0, 1)
     
     # Финансы
@@ -224,7 +232,7 @@ def generate_pdf(company: CompanyFull, mode: Literal["free", "full"]) -> bytes:
         if mode == "free":
             pdf.add_locked_field(f"Данные за {len(company.finance)} лет — доступно в платном отчёте")
         else:
-            pdf.set_font(pdf.unicode_font, 'B', 10)
+            _set_font(pdf, 'B', 10)
             pdf.cell(30, 6, "Год", 1, 0, 'C')
             pdf.cell(40, 6, "Выручка", 1, 0, 'C')
             pdf.cell(40, 6, "Прибыль", 1, 0, 'C')
@@ -232,7 +240,7 @@ def generate_pdf(company: CompanyFull, mode: Literal["free", "full"]) -> bytes:
             pdf.cell(40, 6, "Обязательства", 1, 1, 'C')
             
             for fy in sorted(company.finance, key=lambda x: x.year, reverse=True):
-                pdf.set_font(pdf.unicode_font, '', 9)
+                _set_font(pdf, '', 9)
                 pdf.cell(30, 6, str(fy.year), 1, 0, 'C')
                 pdf.cell(40, 6, fy.revenue or '-', 1, 0, 'C')
                 pdf.cell(40, 6, fy.profit or '-', 1, 0, 'C')
@@ -262,10 +270,10 @@ def generate_pdf(company: CompanyFull, mode: Literal["free", "full"]) -> bytes:
             
             if flags:
                 for flag in flags:
-                    pdf.set_font(pdf.unicode_font, '', 9)
+                    _set_font(pdf, '', 9)
                     pdf.cell(0, 5, f"[!] {flag}", 0, 1)
             else:
-                pdf.set_font(pdf.unicode_font, '', 10)
+                _set_font(pdf, '', 10)
                 pdf.set_text_color(16, 185, 129)  # Зеленый
                 pdf.cell(0, 6, "[OK] Правовых нарушений не обнаружено", 0, 1)
     
@@ -279,7 +287,7 @@ def generate_pdf(company: CompanyFull, mode: Literal["free", "full"]) -> bytes:
                 founder_info = founder.name
                 if founder.share:
                     founder_info += f" (доля: {founder.share})"
-                pdf.set_font(pdf.unicode_font, '', 9)
+                _set_font(pdf, '', 9)
                 pdf.cell(0, 5, f"• {founder_info}", 0, 1)
     
     # Лицензии
@@ -296,22 +304,22 @@ def generate_pdf(company: CompanyFull, mode: Literal["free", "full"]) -> bytes:
                     license_info += f" от {license.date}"
                 if license.authority:
                     license_info += f" ({license.authority})"
-                pdf.set_font(pdf.unicode_font, '', 9)
+                _set_font(pdf, '', 9)
                 pdf.cell(0, 5, f"• {license_info}", 0, 1)
     
     # Подпись
     pdf.ln(10)
-    pdf.set_font(pdf.unicode_font, 'I', 10)
+    _set_font(pdf, '', 10)
     pdf.set_text_color(107, 114, 128)  # Серый
     pdf.cell(0, 6, f"Подпись: {BRAND_LINK}", 0, 1, 'C')
     pdf.cell(0, 6, f"Дата формирования: {datetime.now().strftime(DATE_FORMAT)}", 0, 1, 'C')
     
     try:
-        log.debug("PDF: calling pdf.output()")
+        log.debug("PDF output", mode=mode, company_name=company.short_name)
         pdf_bytes = pdf.output(dest="S")
-        log.info("PDF: generated successfully", mode=mode, company_name=company.short_name, size=len(pdf_bytes))
+        log.info("PDF generated", mode=mode, company_name=company.short_name, size=len(pdf_bytes))
         return pdf_bytes
     except Exception as e:
-        log.exception("PDF: failed to generate PDF", exc_info=e, mode=mode, company_name=company.short_name)
-        log.debug("PDF: error details", error_type=type(e).__name__, error_args=str(e.args))
+        log.warning("PDF failed; ensure DejaVu fonts in assets/fonts (see README).", mode=mode, company_name=company.short_name, exc_info=e)
+        log.debug("PDF error details", error_type=type(e).__name__, error_args=str(e.args))
         raise

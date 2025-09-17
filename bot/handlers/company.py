@@ -87,15 +87,18 @@ async def free_report(cb: CallbackQuery, state: FSMContext):
         selected = data.get("selected") or {}
         url = selected.get("url") or f"/search?query={selected.get('inn','')}"
         
-        log.debug("free_report: fetching company data", url=url, user_id=cb.from_user.id)
+        log.debug("HTTP fetch", url=url, user_id=cb.from_user.id)
         
         # Получаем данные компании
         client = ThrottledClient()
         try:
             r = await client.get(url)
+            status = getattr(r, "status_code", None)
+            log.info("HTTP fetched", url=url, status=status, user_id=cb.from_user.id)
             company = await parse_company_html(r.text, url=r.request.url.path)
         except Exception as e:
-            log.exception("Company page fetch/parse failed", exc_info=e)
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            log.warning("HTTP fetch failed", url=url, status=status, user_id=cb.from_user.id, exc_info=e)
             company = CompanyFull(
                 short_name=selected.get("name", "Неизвестная компания"),
                 inn=selected.get("inn", ""),
@@ -113,22 +116,45 @@ async def free_report(cb: CallbackQuery, state: FSMContext):
                 has_contacts=bool(company.contacts),
                 user_id=cb.from_user.id)
         
-        log.debug("free_report: calling generate_pdf function", user_id=cb.from_user.id)
+        log.debug("PDF generate", mode="free", user_id=cb.from_user.id)
         
         # Генерируем PDF
-        pdf_bytes = generate_pdf(company, "free")
+        try:
+            log.debug("free_report: generating PDF via reports.pdf.generate_pdf", user_id=cb.from_user.id)
+            pdf_bytes = generate_pdf(company, "free")
+        except Exception as pdf_err:
+            # Graceful fallback: отправляем текстовый отчёт через renderer
+            log.warning("PDF failed; ensure DejaVu fonts in assets/fonts (see README). Falling back to text.", mode="free", user_id=cb.from_user.id, exc_info=pdf_err)
+            try:
+                text_report = render_free(company)
+            except Exception as render_err:
+                log.exception("free_report: render_free failed", exc_info=render_err, user_id=cb.from_user.id)
+                text_report = (
+                    "📄 Бесплатный отчёт (текст):\n"
+                    f"Название: {company.short_name or '-'}\n"
+                    f"ИНН: {company.inn or '-'}\n"
+                    f"ОГРН: {company.ogrn or '-'}\n"
+                    f"КПП: {getattr(company, 'kpp', '-') or '-'}\n"
+                    f"Адрес: {company.address or '-'}\n"
+                    f"Руководитель: {company.director or '-'}\n"
+                )
+                if company.okved_main:
+                    text_report += f"ОКВЭД (осн.): {company.okved_main}\n"
+            await cb.message.answer(text_report)
+            await cb.answer()
+            return
         
-        log.info("free_report: PDF generated successfully", 
-                size=len(pdf_bytes), 
-                user_id=cb.from_user.id)
+        log.info("PDF generated", mode="free", size=len(pdf_bytes), user_id=cb.from_user.id)
         
         # Отправляем PDF как документ
+        log.debug("PDF send", mode="free", size=len(pdf_bytes), user_id=cb.from_user.id)
         await cb.message.answer_document(
             document=BufferedInputFile(pdf_bytes, filename=f"{company.short_name}_free_report.pdf"),
             caption=f"📊 Бесплатный отчёт по компании {company.short_name}"
         )
-        
-        log.info("free_report: PDF sent successfully", user_id=cb.from_user.id)
+        log.info("PDF sent", mode="free", size=len(pdf_bytes), user_id=cb.from_user.id)
+        # Подтверждение без дублирования кнопок
+        await cb.message.answer("✅ Бесплатный отчёт готов!")
         
     except Exception as e:
         log.error("free_report: PDF generation failed", 
@@ -184,6 +210,8 @@ async def paid_report(cb: CallbackQuery, state: FSMContext):
                 FSInputFile(tmp_path, filename="bizscan_report_full.pdf")
             )
             log.info("PDF sent (full)")
+            # Подтверждение без кнопки скачивания, т.к. файл уже отправлен
+            await cb.message.answer("✅ Полный отчёт готов!")
         except Exception as e:
             log.exception("PDF generation/send failed (full)", exc_info=e)
             await cb.message.answer("Не удалось сгенерировать PDF. Попробуйте позже.")
@@ -193,13 +221,6 @@ async def paid_report(cb: CallbackQuery, state: FSMContext):
                     os.unlink(tmp_path)
                 except Exception:
                     pass
-        
-        # Создаём кнопку для скачивания PDF
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📄 Скачать PDF", callback_data="download_pdf_full")]
-        ])
-        
-        await cb.message.answer("✅ Полный отчёт готов!", reply_markup=keyboard)
         await cb.answer()
         
     except Exception as e:

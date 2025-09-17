@@ -33,6 +33,21 @@ cp .env.example .env
 python app.py
 ```
 
+### Pre-commit (кодстайл)
+
+Установите git‑хуки для авто‑линтинга и форматирования (ruff, black):
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+Запустить вручную на всём репозитории:
+
+```bash
+pre-commit run --all-files
+```
+
 ## Новые возможности
 
 ### PDF отчёты
@@ -41,6 +56,52 @@ python app.py
 - **Структурированные секции** с карточками и таблицами
 - **Автоматическая пагинация** и нумерация страниц
 - **Zebra-таблицы** для финансовых данных
+
+#### Unicode‑шрифты (DejaVu)
+
+Для корректного отображения кириллицы в PDF используем DejaVu Sans Condensed.
+
+1) Положите шрифты в `assets/fonts/`:
+   - `DejaVuSansCondensed.ttf`
+   - `DejaVuSansCondensed-Bold.ttf`
+
+   Можно скачать автоматически:
+   ```bash
+   python download_fonts.py
+   ```
+
+2) В коде `reports/pdf.py` шрифты подключаются автоматически (uni=True). Если шрифты не найдены, генерация PDF прерывается, а бот отправляет текстовый отчёт вместо PDF (graceful fallback).
+
+3) Не используем курсив, пока нет файла `DejaVuSansCondensed-Oblique.ttf`.
+
+## Шрифты для PDF (кириллица)
+
+- Быстрая установка:
+  ```bash
+  python download_fonts.py
+  ```
+  Скрипт скачает `DejaVuSansCondensed.ttf` и `DejaVuSansCondensed-Bold.ttf` в `assets/fonts/`.
+
+- Если нет интернета/прокси — положите файлы вручную в `assets/fonts/`:
+  - `DejaVuSansCondensed.ttf`
+  - `DejaVuSansCondensed-Bold.ttf`
+
+- Без этих шрифтов PDF не соберётся (бот отправит текстовый отчёт как graceful fallback).
+
+## Настройки окружения (.env)
+
+Создайте `.env` на основе `.env.example` и заполните обязательные переменные:
+
+- `BOT_TOKEN` — токен Telegram-бота
+- `RUSPROFILE_SESSID` — sessionid подписчика rusprofile (для повышенной стабильности)
+- `RUSPROFILE_CSRF` — csrftoken подписчика rusprofile
+- `BRAND_LINK` — ссылка на ваш бренд/канал, выводится в подписи PDF
+
+Пример создания:
+```bash
+cp .env.example .env
+# затем отредактируйте .env
+```
 
 ### Улучшенный парсинг
 - **Модульная архитектура** с отдельными extractors и validators

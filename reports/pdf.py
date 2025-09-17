@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from typing import Literal
+from typing import Literal, Optional
 from domain.models import CompanyFull
 from settings import BRAND_NAME, BRAND_LINK, DATE_FORMAT
 from core.logger import setup_logging
@@ -55,6 +55,28 @@ def _set_font(pdf: "FPDF", style: str = "", size: int = 12) -> None:
     # Не используем курсив, если Oblique-ttf не включён в FONT_FILES
     style = "B" if style == "B" else ""
     pdf.set_font("DejaVu", style, size)
+
+
+# Универсальная строка с переносами: фиксированная колонка метки и
+# автоширина значения без обрезаний/наложений
+def row(pdf: "FPDF", label: str, value: Optional[str], *, label_w: int = 55, lh: int = 6) -> None:
+    value = value or "—"
+    # effective page width
+    epw = getattr(pdf, "epw", pdf.w - pdf.l_margin - pdf.r_margin)
+    v_w = epw - label_w
+    x, y = pdf.get_x(), pdf.get_y()
+
+    # Считаем высоту блока по количеству строк значения
+    lines = pdf.multi_cell(v_w, lh, value, split_only=True)
+    h = max(lh, lh * len(lines))
+
+    # Метка (занимает всю высоту блока)
+    pdf.set_xy(x, y)
+    pdf.multi_cell(label_w, h, txt=label, border=0, align="L", new_x="RIGHT", new_y="TOP")
+
+    # Значение с переносами
+    pdf.set_xy(x + label_w, y)
+    pdf.multi_cell(v_w, lh, txt=value, border=0, align="L", new_x="LMARGIN", new_y="NEXT")
 
 class PDFReport(FPDF):
     def __init__(self):
@@ -182,20 +204,20 @@ def generate_pdf(company: CompanyFull, mode: Literal["free", "full"]) -> bytes:
     pdf.add_field("Название", company.short_name)
     if company.full_name and company.full_name != company.short_name:
         pdf.add_field("Полное наименование", company.full_name)
-    pdf.add_field("ИНН", company.inn)
-    pdf.add_field("ОГРН", company.ogrn)
+    row(pdf, "ИНН:", company.inn)
+    row(pdf, "ОГРН:", company.ogrn)
     if company.ogrn_date:
-        pdf.add_field("Дата ОГРН", company.ogrn_date)
-    pdf.add_field("КПП", company.kpp)
-    pdf.add_field("Статус", company.status)
-    pdf.add_field("Дата регистрации", company.reg_date)
-    pdf.add_field("Адрес", company.address)
-    pdf.add_field("Руководитель", company.director)
+        row(pdf, "Дата ОГРН:", company.ogrn_date)
+    row(pdf, "КПП:", getattr(company, "kpp", None))
+    row(pdf, "Статус:", company.status)
+    row(pdf, "Дата регистрации:", company.reg_date)
+    row(pdf, "Адрес:", company.address)
+    row(pdf, "Руководитель:", company.director)
     
     # Деятельность
     if company.okved_main or company.okved_additional:
         pdf.add_section_title("Деятельность", "")
-        pdf.add_field("Основной вид деятельности", company.okved_main)
+        row(pdf, "Основной вид деятельности:", company.okved_main)
         
         if company.okved_additional:
             if mode == "free":

@@ -61,6 +61,21 @@ def find_by_label(soup: BeautifulSoup, labels: List[str]) -> Optional[str]:
     
     return None
 
+def find_in_dl(soup: BeautifulSoup, label_rx: str) -> Optional[str]:
+    """Ищет значение в парах dl > dt/dd по регулярному выражению метки.
+
+    На rusprofile основные реквизиты размечены именно в dl, поэтому этот
+    способ надёжнее общего поиска.
+    """
+    for dl in soup.select("dl, .company-requisites dl"):
+        dts = dl.select("dt")
+        dds = dl.select("dd")
+        for dt, dd in zip(dts, dds):
+            label_text = dt.get_text(" ", strip=True)
+            if re.search(label_rx, label_text, re.IGNORECASE):
+                return dd.get_text(" ", strip=True)
+    return None
+
 def _extract_value_from_element(element: Tag, label: str) -> Optional[str]:
     """Извлекает значение из элемента относительно лейбла"""
     if not element:
@@ -108,14 +123,14 @@ def _extract_value_from_element(element: Tag, label: str) -> Optional[str]:
             if text and text != label:
                 return text[:MAX_LEN]
         elif isinstance(current, Tag):
-            text = (current.get_text(strip=True) or "").strip()
+            text = (current.get_text(" ", strip=True) or "").strip()
             if text and text != label:
                 return text[:MAX_LEN]
         current = current.next_sibling
     
     # Ищем в дочерних элементах
     for child in element.find_all(['span', 'div', 'td', 'li']):
-        text = (child.get_text(strip=True) or "").strip()
+        text = (child.get_text(" ", strip=True) or "").strip()
         if text and text != label and len(text) > len(label):
             return text[:MAX_LEN]
     
@@ -161,17 +176,24 @@ def extract_stats_codes(soup: BeautifulSoup) -> Dict[str, str]:
     
     return codes
 
-def extract_okveds(soup: BeautifulSoup) -> Dict[str, List[str]]:
-    """Извлекает коды ОКВЭД"""
-    okveds = {'main': [], 'additional': []}
+def extract_okveds(soup: BeautifulSoup) -> Dict[str, Any]:
+    """Извлекает коды ОКВЭД и, если доступно, деталь основного кода (код, заголовок)."""
+    okveds: Dict[str, Any] = {'main': [], 'additional': []}
     
     # Поиск основного ОКВЭД
     main_labels = ["Основной вид деятельности", "Основной ОКВЭД", "Основной код ОКВЭД"]
     main_value = find_by_label(soup, main_labels)
+    main_detail = None
     if main_value:
-        # Извлекаем код ОКВЭД из текста
+        # Попробуем извлечь "код — заголовок"
+        m = re.search(r'(\d{2}\.\d{2}(?:\.\d{2})?)\s*[-—–]?\s*(.+)', main_value)
+        if m:
+            main_detail = (m.group(1).strip(), m.group(2).strip())
+        # Извлекаем код ОКВЭД из текста (на случай отсутствия заголовка)
         okved_codes = re.findall(r'\d{2}\.\d{2}(?:\.\d{2})?', main_value)
         okveds['main'] = okved_codes
+    if main_detail:
+        okveds['main_detail'] = main_detail  # ('86.10', 'Деятельность больниц')
     
     # Поиск дополнительных ОКВЭД
     # Ищем таблицы или списки с кодами
@@ -337,6 +359,17 @@ def extract_company_basic_info(soup: BeautifulSoup) -> Dict[str, str]:
         value = find_by_label(soup, labels)
         if value:
             info[field] = value
+
+    # Приоритетно пытаемся достать реквизиты из dl > dt/dd
+    inn_dl  = find_in_dl(soup, r'^ИНН\b')
+    kpp_dl  = find_in_dl(soup, r'^КПП\b')
+    ogrn_dl = find_in_dl(soup, r'^ОГРН\b')
+    if inn_dl:
+        info['inn'] = inn_dl
+    if kpp_dl:
+        info['kpp'] = kpp_dl
+    if ogrn_dl:
+        info['ogrn'] = ogrn_dl
     
     return info
 

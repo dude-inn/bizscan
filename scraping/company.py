@@ -77,6 +77,11 @@ async def parse_company_html(html: str, url: Optional[str] = None) -> CompanyFul
         if okveds['main']:
             data.okved_main = okveds['main'][0]  # берем первый основной
         data.okved_additional = okveds['additional']
+        # Сохраним подробности ОКВЭД (код, заголовок), если найдены
+        try:
+            setattr(data, 'okveds', okveds)
+        except Exception:
+            pass
 
         # Извлекаем учредителей и руководителей
         people = extract_founders_directors(soup)
@@ -113,6 +118,25 @@ async def parse_company_html(html: str, url: Optional[str] = None) -> CompanyFul
         # Извлекаем лицензии
         licenses_data = extract_licenses(soup)
         data.licenses = [License(**license) for license in licenses_data]
+
+        # Адрес: жёсткие CSS-фолбэки
+        if not data.address:
+            addr_el = (soup.select_one("[itemprop='address']") or
+                       soup.select_one(".company-address, .company-info__address"))
+            if addr_el:
+                data.address = addr_el.get_text(" ", strip=True)
+
+        # Статус: по пиле/классу или ключевым словам
+        if not data.status:
+            st_el = soup.select_one(".company-status, .company-status__text, .status")
+            if st_el:
+                data.status = st_el.get_text(" ", strip=True)
+        if not data.status:
+            page_txt = soup.get_text(" ", strip=True).lower()
+            for k in ["действующ", "ликвидирован", "в стадии ликвидации", "реорганизац"]:
+                if k in page_txt:
+                    data.status = "Действующая" if "действующ" in k else "Не действует"
+                    break
 
         # Валидация данных
         validated_data = validate_company_data({

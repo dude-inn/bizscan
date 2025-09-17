@@ -126,21 +126,26 @@ async def free_report(cb: CallbackQuery, state: FSMContext):
             # Graceful fallback: отправляем текстовый отчёт через renderer
             log.warning("PDF failed; ensure DejaVu fonts in assets/fonts (see README). Falling back to text.", mode="free", user_id=cb.from_user.id, exc_info=pdf_err)
             try:
-                text_report = render_free(company)
+                blocks = render_free(company)
+                if isinstance(blocks, (list, tuple)):
+                    for block in blocks:
+                        await cb.message.answer(block)
+                else:
+                    await cb.message.answer(str(blocks))
             except Exception as render_err:
                 log.exception("free_report: render_free failed", exc_info=render_err, user_id=cb.from_user.id)
-                text_report = (
-                    "📄 Бесплатный отчёт (текст):\n"
-                    f"Название: {company.short_name or '-'}\n"
-                    f"ИНН: {company.inn or '-'}\n"
-                    f"ОГРН: {company.ogrn or '-'}\n"
-                    f"КПП: {getattr(company, 'kpp', '-') or '-'}\n"
-                    f"Адрес: {company.address or '-'}\n"
-                    f"Руководитель: {company.director or '-'}\n"
-                )
+                fallback = [
+                    "📄 Бесплатный отчёт (текст):",
+                    f"Название: {company.short_name or '-'}",
+                    f"ИНН: {company.inn or '-'}",
+                    f"ОГРН: {company.ogrn or '-'}",
+                    f"КПП: {getattr(company, 'kpp', '-') or '-'}",
+                    f"Адрес: {company.address or '-'}",
+                    f"Руководитель: {company.director or '-'}",
+                ]
                 if company.okved_main:
-                    text_report += f"ОКВЭД (осн.): {company.okved_main}\n"
-            await cb.message.answer(text_report)
+                    fallback.append(f"ОКВЭД (осн.): {company.okved_main}")
+                await cb.message.answer("\n".join(fallback))
             await cb.answer()
             return
         

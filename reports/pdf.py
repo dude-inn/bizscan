@@ -6,42 +6,55 @@ from core.logger import setup_logging
 from datetime import datetime
 from pathlib import Path
 from fpdf import FPDF
+from fpdf.errors import FPDFUnicodeEncodingException
 import re
 
 log = setup_logging()
 
-# Папка со шрифтами DejaVu (должны лежать: DejaVuSansCondensed.ttf, DejaVuSansCondensed-Bold.ttf)
-FONTS_DIR = Path(__file__).resolve().parents[1] / "assets" / "fonts"
+# Карта семейства/стиля в имя файла
+FONT_FILES = {
+    ("DejaVu", ""): "DejaVuSansCondensed.ttf",
+    ("DejaVu", "B"): "DejaVuSansCondensed-Bold.ttf",
+    # ("DejaVu", "I"): "DejaVuSansCondensed-Oblique.ttf",  # подключать только если файл реально есть
+}
+
+
+def _find_font_file(filename: str) -> Path:
+    here = Path(__file__).resolve().parent
+    candidates = [
+        Path.cwd() / "assets" / "fonts" / filename,
+        here / "assets" / "fonts" / filename,
+        here / "fonts" / filename,
+        here.parent / "assets" / "fonts" / filename,
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    raise FileNotFoundError(
+        f"Font not found: {filename}; tried: {[str(c) for c in candidates]}"
+    )
 
 
 def _ensure_fonts(pdf: "FPDF") -> None:
-    """Регистрирует Unicode‑шрифты DejaVu в экземпляре FPDF.
-
-    Требуются файлы:
-    - DejaVuSansCondensed.ttf
-    - DejaVuSansCondensed-Bold.ttf
-    (опционально) DejaVuSansCondensed-Oblique.ttf — если нужен курсив
-    """
-    pdf.add_font("DejaVu", "", str(FONTS_DIR / "DejaVuSansCondensed.ttf"), uni=True)
-    pdf.add_font("DejaVu", "B", str(FONTS_DIR / "DejaVuSansCondensed-Bold.ttf"), uni=True)
-    # Курсив подключаем только если ttf реально присутствует и используется где-то
-    # pdf.add_font("DejaVu", "I", str(FONTS_DIR / "DejaVuSansCondensed-Oblique.ttf"), uni=True)
+    # Регистрируем все необходимые шрифты DejaVu
+    registered = []
+    for (family, style), fn in FONT_FILES.items():
+        path = _find_font_file(fn)
+        try:
+            pdf.add_font(family, style, str(path), uni=True)
+            registered.append(fn)
+        except Exception:
+            # Игнорируем повторную регистрацию
+            pass
+    if registered:
+        log.info("PDF: fonts registered", fonts=registered)
 
 
 def _set_font(pdf: "FPDF", style: str = "", size: int = 12) -> None:
-    """Безопасная установка шрифта DejaVu.
-
-    При отсутствии ttf-файлов генерируем исключение, чтобы вызывающий код
-    мог отправить текстовый отчёт вместо PDF (graceful fallback).
-    """
-    try:
-        _ensure_fonts(pdf)
-        # Не используем курсив, пока нет Oblique-ttf
-        style = "B" if style == "B" else ""
-        pdf.set_font("DejaVu", style, size)
-    except Exception as e:
-        log.warning("PDF: Unicode font not available, falling back to plain text", exc_info=e)
-        raise
+    _ensure_fonts(pdf)
+    # Не используем курсив, если Oblique-ttf не включён в FONT_FILES
+    style = "B" if style == "B" else ""
+    pdf.set_font("DejaVu", style, size)
 
 class PDFReport(FPDF):
     def __init__(self):
@@ -319,7 +332,15 @@ def generate_pdf(company: CompanyFull, mode: Literal["free", "full"]) -> bytes:
         pdf_bytes = pdf.output(dest="S")
         log.info("PDF generated", mode=mode, company_name=company.short_name, size=len(pdf_bytes))
         return pdf_bytes
+    except (FPDFUnicodeEncodingException, FileNotFoundError) as e:
+        # Явно подсказываем про шрифты/юникод
+        log.warning(
+            "PDF failed; ensure DejaVu fonts in assets/fonts (see README).",
+            mode=mode,
+            company_name=company.short_name,
+            exc_info=e,
+        )
+        raise
     except Exception as e:
-        log.warning("PDF failed; ensure DejaVu fonts in assets/fonts (see README).", mode=mode, company_name=company.short_name, exc_info=e)
-        log.debug("PDF error details", error_type=type(e).__name__, error_args=str(e.args))
+        log.warning("PDF failed", mode=mode, company_name=company.short_name, exc_info=e)
         raise

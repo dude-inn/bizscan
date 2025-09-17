@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 
 class CompanyBrief(BaseModel):
     name: str
@@ -67,3 +67,18 @@ class CompanyFull(BaseModel):
     flags: Flags = Field(default_factory=Flags)
     licenses: List[License] = Field(default_factory=list)  # Новое поле для лицензий
     source_url: Optional[str] = None
+    # Расширенные поля (не ломаем совместимость)
+    authorized_capital: Optional[str] = None
+    okved_main_code: Optional[str] = None
+    okved_main_title: Optional[str] = None
+    codes: Dict[str, str] = Field(default_factory=dict)
+    finance_summary: Dict[str, Any] = Field(default_factory=dict)
+    reliability: Dict[str, Any] = Field(default_factory=dict)
+    executions: Dict[str, Any] = Field(default_factory=dict)
+    procurements: Dict[str, Any] = Field(default_factory=dict)
+    checks: Dict[str, Any] = Field(default_factory=dict)
+    trademarks: Dict[str, Any] = Field(default_factory=dict)
+    events: Dict[str, Any] = Field(default_factory=dict)
+    registry_holder: Optional[str] = None
+    headcount: Optional[str] = None
+    extra: Dict[str, Any] = Field(default_factory=dict)

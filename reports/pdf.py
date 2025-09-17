@@ -78,6 +78,24 @@ def row(pdf: "FPDF", label: str, value: Optional[str], *, label_w: int = 55, lh:
     pdf.set_xy(x + label_w, y)
     pdf.multi_cell(v_w, lh, txt=value, border=0, align="L", new_x="LMARGIN", new_y="NEXT")
 
+
+def section(pdf: "FPDF", title: str) -> None:
+    pdf.ln(2)
+    _set_font(pdf, "B", 12)
+    pdf.cell(0, 8, title, ln=1)
+    _set_font(pdf, "", 11)
+
+
+def lock(msg: str = "🔒 Доступно в платном отчёте") -> str:
+    return msg
+
+
+def ensure_space(pdf: "FPDF", min_remaining: int = 30) -> None:
+    """Добавляет страницу, если осталось мало места."""
+    bottom_margin = getattr(pdf, 'b_margin', 15)
+    if (pdf.h - bottom_margin - pdf.get_y()) < min_remaining:
+        pdf.add_page()
+
 class PDFReport(FPDF):
     def __init__(self):
         super().__init__()
@@ -217,7 +235,18 @@ def generate_pdf(company: CompanyFull, mode: Literal["free", "full"]) -> bytes:
     # Деятельность
     if company.okved_main or company.okved_additional:
         pdf.add_section_title("Деятельность", "")
-        row(pdf, "Основной вид деятельности:", company.okved_main)
+        # Основной ОКВЭД: код — наименование (если доступно)
+        okved_code, okved_title = None, None
+        try:
+            ok_main_detail = getattr(company, "okveds", {}).get("main_detail")
+            if ok_main_detail and isinstance(ok_main_detail, (list, tuple)):
+                okved_code, okved_title = ok_main_detail[0], ok_main_detail[1]
+        except Exception:
+            pass
+        if not okved_code and company.okved_main:
+            okved_code = company.okved_main
+        okved_line = f"{okved_code or ''} — {okved_title or ''}".strip().strip("—").strip()
+        row(pdf, "Основной вид деятельности:", okved_line or company.okved_main)
         
         if company.okved_additional:
             if mode == "free":
@@ -237,7 +266,7 @@ def generate_pdf(company: CompanyFull, mode: Literal["free", "full"]) -> bytes:
         pdf.add_field("МСП-статус", company.msp_status)
         pdf.add_field("Налоговый орган", company.tax_authority)
         
-        if company.stats_codes:
+    if company.stats_codes:
             if mode == "free":
                 pdf.add_locked_field(f"Коды статистики: {len(company.stats_codes)} шт. — доступно в платном отчёте")
             else:
@@ -260,8 +289,16 @@ def generate_pdf(company: CompanyFull, mode: Literal["free", "full"]) -> bytes:
                     for value in values:
                         _set_font(pdf, '', 9)
                         pdf.cell(0, 5, f"• {value}", 0, 1)
+
+    # Связи (приоритетно во FULL): агрегаты
+    if mode == "full":
+        pdf.add_section_title("Связи", "")
+        founders_count = len(getattr(company, 'founders', []) or [])
+        directors = getattr(company, 'director', None)
+        row(pdf, "Учредители:", f"{founders_count} шт.")
+        row(pdf, "Руководитель:", directors)
     
-    # Финансы
+    # Финансы (приоритетно во FULL, лимит 5 лет)
     if company.finance:
         pdf.add_section_title("Финансы", "")
         if mode == "free":
@@ -273,14 +310,17 @@ def generate_pdf(company: CompanyFull, mode: Literal["free", "full"]) -> bytes:
             pdf.cell(40, 6, "Прибыль", 1, 0, 'C')
             pdf.cell(40, 6, "Активы", 1, 0, 'C')
             pdf.cell(40, 6, "Обязательства", 1, 1, 'C')
-            
-            for fy in sorted(company.finance, key=lambda x: x.year, reverse=True):
+            years_sorted = sorted(company.finance, key=lambda x: x.year, reverse=True)[:5]
+            for fy in years_sorted:
                 _set_font(pdf, '', 9)
                 pdf.cell(30, 6, str(fy.year), 1, 0, 'C')
                 pdf.cell(40, 6, fy.revenue or '-', 1, 0, 'C')
                 pdf.cell(40, 6, fy.profit or '-', 1, 0, 'C')
                 pdf.cell(40, 6, fy.assets or '-', 1, 0, 'C')
                 pdf.cell(40, 6, fy.liabilities or '-', 1, 1, 'C')
+            if len(company.finance) > 5:
+                _set_font(pdf, '', 9)
+                pdf.cell(0, 6, f"… и ещё {len(company.finance) - 5} лет", 0, 1)
     
     # Правовые индикаторы
     if company.flags:
@@ -312,6 +352,20 @@ def generate_pdf(company: CompanyFull, mode: Literal["free", "full"]) -> bytes:
                 pdf.set_text_color(16, 185, 129)  # Зеленый
                 pdf.cell(0, 6, "[OK] Правовых нарушений не обнаружено", 0, 1)
     
+    # Суды и исполнительные производства (FULL)
+    if mode == "full":
+        ensure_space(pdf)
+        pdf.add_section_title("Суды и исполнительные производства", "")
+        # Заглушка: выводим счётчики, если представлены во flags/extra
+        try:
+            extra = getattr(company, 'extra', {}) or {}
+            courts = extra.get('courts', {})
+            execs = extra.get('executions', {})
+            row(pdf, "Арбитражные дела:", str(courts.get('count', '—')))
+            row(pdf, "Исп. производства:", str(execs.get('count', '—')))
+        except Exception:
+            pass
+    
     # Учредители
     if company.founders:
         pdf.add_section_title("Учредители", "")
@@ -341,6 +395,51 @@ def generate_pdf(company: CompanyFull, mode: Literal["free", "full"]) -> bytes:
                     license_info += f" ({license.authority})"
                 _set_font(pdf, '', 9)
                 pdf.cell(0, 5, f"• {license_info}", 0, 1)
+    
+    # Госзакупки / Проверки / История (FULL)
+    if mode == "full":
+        ensure_space(pdf)
+        pdf.add_section_title("Госзакупки", "")
+        try:
+            extra = getattr(company, 'extra', {}) or {}
+            proc = extra.get('procurements', {})
+            row(pdf, "Всего закупок:", str(proc.get('count', '—')))
+            row(pdf, "Сумма:", str(proc.get('sum', '—')))
+        except Exception:
+            pass
+        ensure_space(pdf)
+        pdf.add_section_title("Проверки", "")
+        try:
+            checks = extra.get('checks', {})
+            row(pdf, "Всего:", str(checks.get('total', '—')))
+            row(pdf, "С нарушениями:", str(checks.get('with_violations', '—')))
+        except Exception:
+            pass
+        ensure_space(pdf)
+        pdf.add_section_title("История", "")
+        try:
+            events = extra.get('events', {})
+            recent = events.get('recent', [])[:5]
+            for ev in recent:
+                _set_font(pdf, '', 9)
+                pdf.cell(0, 5, f"• {ev}", 0, 1)
+        except Exception:
+            pass
+
+    # Дополнительные обзорные разделы (free: только замки)
+    if mode == "free":
+        pdf.add_section_title("Суды", "")
+        pdf.add_locked_field(lock())
+        pdf.add_section_title("Исполнительные производства", "")
+        pdf.add_locked_field(lock())
+        pdf.add_section_title("Госзакупки", "")
+        pdf.add_locked_field(lock())
+        pdf.add_section_title("Проверки", "")
+        pdf.add_locked_field(lock())
+        pdf.add_section_title("Связи", "")
+        pdf.add_locked_field(lock())
+        pdf.add_section_title("Товарные знаки", "")
+        pdf.add_locked_field(lock())
     
     # Подпись
     pdf.ln(10)

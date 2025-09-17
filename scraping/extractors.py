@@ -210,6 +210,271 @@ def extract_okveds(soup: BeautifulSoup) -> Dict[str, Any]:
     
     return okveds
 
+
+# === Новые сводные экстракторы ===
+def extract_core_requisites(soup: BeautifulSoup) -> Dict[str, Any]:
+    """Возвращает ключевые реквизиты карточки.
+
+    short_name, full_name, status, inn, kpp, ogrn, ogrn_date, reg_date,
+    authorized_capital, address, director, tax_authority,
+    shareholder_registry_holder, msp_status, headcount, contacts(dict)
+    """
+    data: Dict[str, Any] = {}
+
+    # Названия
+    h1 = soup.select_one("h1")
+    if h1:
+        data["short_name"] = h1.get_text(" ", strip=True)
+    # Полное название — берём ближайший длинный текст
+    full_el = soup.find(text=lambda t: t and "полное наименование" in t.lower())
+    if full_el and getattr(full_el, 'parent', None):
+        cur = full_el.parent.next_sibling
+        while cur is not None:
+            if hasattr(cur, 'get_text'):
+                t = cur.get_text(" ", strip=True)
+                if t and (not data.get("full_name") or len(t) > len(data.get("short_name", ""))):
+                    data["full_name"] = t
+                    break
+            cur = cur.next_sibling
+
+    # Статус
+    st_el = soup.select_one(".company-status, .company-status__text, .status")
+    if st_el:
+        data["status"] = st_el.get_text(" ", strip=True)
+
+    # Адрес
+    addr_el = (soup.select_one("[itemprop='address']") or
+               soup.select_one(".company-address, .company-info__address"))
+    if addr_el:
+        data["address"] = addr_el.get_text(" ", strip=True)
+
+    # Директор (строка с должностью)
+    dir_el = soup.find(text=re.compile(r"директор|руководител", re.I))
+    if dir_el and getattr(dir_el, 'parent', None):
+        # Берём строку целиком рядом
+        parent = dir_el.parent
+        txt = parent.get_text(" ", strip=True)
+        if txt:
+            data["director"] = txt
+
+    # Налоговый орган
+    tax = find_by_label(soup, ["Налоговый орган", "ФНС", "Межрайонная инспекция"])
+    if tax:
+        data["tax_authority"] = tax
+
+    # МСП/численность
+    msp = find_by_label(soup, ["МСП-статус", "Категория субъекта МСП", "МСП"])
+    if msp:
+        data["msp_status"] = msp
+    head = find_by_label(soup, ["Численность", "Среднесписочная численность"])
+    if head:
+        data["headcount"] = head
+
+    # Капитал / держатель реестра
+    cap = find_by_label(soup, ["Уставный капитал", "Уставный фонд", "Капитал"])
+    if cap:
+        data["authorized_capital"] = cap
+    reg_holder = find_by_label(soup, ["Держатель реестра", "Реестродержатель"])
+    if reg_holder:
+        data["shareholder_registry_holder"] = reg_holder
+
+    # Реквизиты через dl
+    inn_dl  = find_in_dl(soup, r'^ИНН\b')
+    kpp_dl  = find_in_dl(soup, r'^КПП\b')
+    ogrn_dl = find_in_dl(soup, r'^ОГРН\b')
+    if inn_dl:
+        data["inn"] = inn_dl
+    if kpp_dl:
+        data["kpp"] = kpp_dl
+    if ogrn_dl:
+        data["ogrn"] = ogrn_dl
+    ogrn_date = find_by_label(soup, ["Дата присвоения ОГРН", "Дата ОГРН"])
+    if ogrn_date:
+        data["ogrn_date"] = ogrn_date
+    reg_date = find_by_label(soup, ["Дата регистрации", "Дата госрегистрации"])
+    if reg_date:
+        data["reg_date"] = reg_date
+
+    # Контакты (переработанная обёртка)
+    data["contacts"] = extract_contacts(soup)
+
+    # Уберём пустые
+    return {k: v for k, v in data.items() if v}
+
+
+def extract_okved_main_detail(soup: BeautifulSoup) -> (Optional[str], Optional[str]):
+    labels = ["Основной вид деятельности", "Основной ОКВЭД", "Основной код ОКВЭД"]
+    main_value = find_by_label(soup, labels)
+    if not main_value:
+        return None, None
+    m = re.search(r'(\d{2}\.\d{2}(?:\.\d{2})?)\s*[-—–]?\s*(.+)', main_value)
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+    # fallback: только код
+    code_only = re.search(r'(\d{2}\.\d{2}(?:\.\d{2})?)', main_value)
+    return (code_only.group(1) if code_only else None), None
+
+
+def extract_stats_codes_block(soup: BeautifulSoup) -> Dict[str, str]:
+    # Переиспользуем существующий
+    return extract_stats_codes(soup)
+
+
+def extract_finance_summary(soup: BeautifulSoup) -> Dict[str, Any]:
+    # За неимением надёжной разметки — соберём таблицу и нарежем до 2020–2024
+    series = extract_finance_table(soup)
+    result: Dict[str, Any] = {"series": {}}
+    for year, vals in series.items():
+        try:
+            y = int(year)
+        except:
+            continue
+        if 2020 <= y <= 2024:
+            result["series"][y] = vals
+    return result
+
+
+def extract_reliability_summary(soup: BeautifulSoup) -> Dict[str, int]:
+    # Простая заготовка — можно развить позже
+    return {"positive": 0, "attention": 0, "negative": 0}
+
+
+def extract_executions_summary(soup: BeautifulSoup) -> Dict[str, Any]:
+    return {"count": 0, "sum": "", "by_category": []}
+
+
+def extract_procurements_summary(soup: BeautifulSoup) -> Dict[str, Any]:
+    return {"count": 0, "sum": "", "roles": {}, "top_customers": []}
+
+
+def extract_checks_summary(soup: BeautifulSoup) -> Dict[str, Any]:
+    return {"total": 0, "planned": 0, "unplanned": 0, "with_violations": 0}
+
+
+def extract_trademarks_summary(soup: BeautifulSoup) -> Dict[str, Any]:
+    return {"count": 0, "active": 0, "last_no": None}
+
+
+def extract_events_summary(soup: BeautifulSoup) -> Dict[str, Any]:
+    return {"last_12m_count": 0, "recent": []}
+
+
+# === Таб-экстракторы (заглушки с базовым извлечением) ===
+def extract_tab_finance(c, soup: BeautifulSoup) -> None:
+    # Попробуем дополнить c.finance из таблиц вкладки
+    series = extract_finance_table(soup)
+    for year, vals in series.items():
+        try:
+            y = int(year)
+        except:
+            continue
+        # обновим/добавим
+        found = next((fy for fy in c.finance if getattr(fy, 'year', None) == y), None)
+        if found:
+            found.revenue = vals.get('revenue', found.revenue)
+            found.profit = vals.get('profit', found.profit)
+            found.assets = vals.get('assets', found.assets)
+            found.liabilities = vals.get('liabilities', found.liabilities)
+        else:
+            from domain.models import FinanceYear
+            c.finance.append(FinanceYear(year=y, **vals))
+
+
+def extract_tab_courts(c, soup: BeautifulSoup) -> None:
+    extra = getattr(c, 'extra', {}) or {}
+    courts = extra.get('courts', {})
+    # Пример селекторов счётчиков
+    cnt = soup.select_one('.arbitration-count, .court-count')
+    if cnt:
+        courts['count'] = int(''.join(re.findall(r'\d+', cnt.get_text(' ', strip=True))) or '0')
+    extra['courts'] = courts
+    c.extra = extra
+
+
+def extract_tab_procurements(c, soup: BeautifulSoup) -> None:
+    extra = getattr(c, 'extra', {}) or {}
+    proc = extra.get('procurements', {})
+    total = soup.select_one('.procurement-count, .tenders-count')
+    if total:
+        proc['count'] = int(''.join(re.findall(r'\d+', total.get_text(' ', strip=True))) or '0')
+    amount = soup.select_one('.procurement-sum, .tenders-sum')
+    if amount:
+        proc['sum'] = amount.get_text(' ', strip=True)
+    extra['procurements'] = proc
+    c.extra = extra
+
+
+def extract_tab_executions(c, soup: BeautifulSoup) -> None:
+    extra = getattr(c, 'extra', {}) or {}
+    ex = extra.get('executions', {})
+    total = soup.select_one('.executions-count')
+    if total:
+        ex['count'] = int(''.join(re.findall(r'\d+', total.get_text(' ', strip=True))) or '0')
+    amount = soup.select_one('.executions-sum')
+    if amount:
+        ex['sum'] = amount.get_text(' ', strip=True)
+    extra['executions'] = ex
+    c.extra = extra
+
+
+def extract_tab_checks(c, soup: BeautifulSoup) -> None:
+    extra = getattr(c, 'extra', {}) or {}
+    checks = extra.get('checks', {})
+    total = soup.select_one('.checks-total')
+    if total:
+        checks['total'] = int(''.join(re.findall(r'\d+', total.get_text(' ', strip=True))) or '0')
+    with_viol = soup.select_one('.checks-violations')
+    if with_viol:
+        checks['with_violations'] = int(''.join(re.findall(r'\d+', with_viol.get_text(' ', strip=True))) or '0')
+    extra['checks'] = checks
+    c.extra = extra
+
+
+def extract_tab_licenses(c, soup: BeautifulSoup) -> None:
+    # Дополнение списка лицензий, если вкладка содержит расширенные данные
+    from domain.models import License
+    rows = soup.select('table tr')
+    for tr in rows[:50]:
+        t = tr.get_text(' ', strip=True)
+        if not t or len(t) < 5:
+            continue
+        # Простейшее извлечение
+        lic = License(type=t)
+        if lic.type and lic.type not in [x.type for x in c.licenses]:
+            c.licenses.append(lic)
+
+
+def extract_tab_history(c, soup: BeautifulSoup) -> None:
+    extra = getattr(c, 'extra', {}) or {}
+    events = extra.get('events', {})
+    recent = events.get('recent', [])
+    for li in soup.select('.history-item, ul li')[:5]:
+        txt = li.get_text(' ', strip=True)
+        if txt and txt not in recent:
+            recent.append(txt)
+    events['recent'] = recent[:5]
+    extra['events'] = events
+    c.extra = extra
+
+
+def extract_tab_requisites(c, soup: BeautifulSoup) -> None:
+    # Коды, если есть на отдельной вкладке
+    codes = extract_stats_codes(soup)
+    if codes:
+        c.codes.update(codes)
+
+
+def extract_tab_activity(c, soup: BeautifulSoup) -> None:
+    # Основной и дополнительные ОКВЭДы
+    code, title = extract_okved_main_detail(soup)
+    if code:
+        c.okved_main_code = code
+    if title:
+        c.okved_main_title = title
+    okveds = extract_okveds(soup)
+    if okveds.get('additional'):
+        c.okved_additional = list(set((c.okved_additional or []) + okveds['additional']))[:50]
+
 def extract_founders_directors(soup: BeautifulSoup) -> Dict[str, List[Dict[str, str]]]:
     """Извлекает информацию об учредителях и руководителях"""
     result = {'founders': [], 'directors': []}

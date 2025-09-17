@@ -6,7 +6,11 @@ from scraping.normalize import normalize_whitespace
 from scraping.extractors import (
     extract_company_basic_info, extract_contacts, extract_stats_codes,
     extract_okveds, extract_founders_directors, extract_finance_table,
-    extract_legal_flags, extract_licenses
+    extract_legal_flags, extract_licenses,
+    extract_core_requisites, extract_okved_main_detail, extract_stats_codes_block,
+    extract_finance_summary, extract_reliability_summary, extract_executions_summary,
+    extract_procurements_summary, extract_checks_summary, extract_trademarks_summary,
+    extract_events_summary
 )
 from scraping.validators import validate_company_data
 from scraping.normalize import normalize_date, normalize_digits
@@ -44,19 +48,21 @@ async def parse_company_html(html: str, url: Optional[str] = None) -> CompanyFul
 
         # Извлекаем основную информацию
         basic_info = extract_company_basic_info(soup)
+        core = extract_core_requisites(soup)
         
         # Заполняем поля
-        data.status = basic_info.get('status')
-        data.inn = basic_info.get('inn')
-        data.kpp = basic_info.get('kpp')
-        data.ogrn = basic_info.get('ogrn')
-        data.ogrn_date = normalize_date(basic_info.get('ogrn_date'))
-        data.reg_date = normalize_date(basic_info.get('reg_date'))
-        data.address = basic_info.get('address')
-        data.director = basic_info.get('director')
+        data.status = core.get('status') or basic_info.get('status')
+        data.inn = core.get('inn') or basic_info.get('inn')
+        data.kpp = core.get('kpp') or basic_info.get('kpp')
+        data.ogrn = core.get('ogrn') or basic_info.get('ogrn')
+        data.ogrn_date = normalize_date(core.get('ogrn_date') or basic_info.get('ogrn_date'))
+        data.reg_date = normalize_date(core.get('reg_date') or basic_info.get('reg_date'))
+        data.address = core.get('address') or basic_info.get('address')
+        data.director = core.get('director') or basic_info.get('director')
         data.okved_main = basic_info.get('okved_main')
-        data.msp_status = basic_info.get('msp_status')
-        data.tax_authority = basic_info.get('tax_authority')
+        data.msp_status = core.get('msp_status') or basic_info.get('msp_status')
+        data.tax_authority = core.get('tax_authority') or basic_info.get('tax_authority')
+        data.authorized_capital = core.get('authorized_capital')
 
         # Жёсткая нормализация числовых идентификаторов до валидной длины
         if data.inn:
@@ -67,7 +73,7 @@ async def parse_company_html(html: str, url: Optional[str] = None) -> CompanyFul
             data.ogrn = normalize_digits(data.ogrn)[:15]  # ОГРН 13/15, не больше 15
 
         # Извлекаем коды статистики
-        data.stats_codes = extract_stats_codes(soup)
+        data.stats_codes = extract_stats_codes_block(soup)
 
         # Извлекаем контакты
         data.contacts = extract_contacts(soup)
@@ -82,6 +88,11 @@ async def parse_company_html(html: str, url: Optional[str] = None) -> CompanyFul
             setattr(data, 'okveds', okveds)
         except Exception:
             pass
+        code, title = extract_okved_main_detail(soup)
+        if code:
+            data.okved_main_code = code
+        if title:
+            data.okved_main_title = title
 
         # Извлекаем учредителей и руководителей
         people = extract_founders_directors(soup)
@@ -137,6 +148,9 @@ async def parse_company_html(html: str, url: Optional[str] = None) -> CompanyFul
                 if k in page_txt:
                     data.status = "Действующая" if "действующ" in k else "Не действует"
                     break
+        # Ограничим статус по длине, чтобы не захватывать длинные описания
+        if data.status and len(data.status) > 150:
+            data.status = data.status[:150]
 
         # Валидация данных
         validated_data = validate_company_data({
@@ -172,6 +186,17 @@ async def parse_company_html(html: str, url: Optional[str] = None) -> CompanyFul
                 ogrn=data.ogrn,
                 has_contacts=bool(data.contacts),
                 finance_years=len(data.finance))
+
+        # Расширенные саммари (в extra)
+        data.extra = {
+            'finance': extract_finance_summary(soup),
+            'reliability': extract_reliability_summary(soup),
+            'executions': extract_executions_summary(soup),
+            'procurements': extract_procurements_summary(soup),
+            'checks': extract_checks_summary(soup),
+            'trademarks': extract_trademarks_summary(soup),
+            'events': extract_events_summary(soup),
+        }
 
     except Exception as e:
         log.exception("Error parsing company HTML", exc_info=e)

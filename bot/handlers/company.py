@@ -14,6 +14,8 @@ from reports.renderer import render_free, render_full
 from reports.pdf import generate_pdf
 from core.logger import setup_logging
 from settings import GENERATE_PDF_FREE
+from scraping.multipage_txt import fetch_all_texts
+from services.text_dump import build_txt
 
 router = Router(name="company")
 log = setup_logging()
@@ -92,10 +94,14 @@ async def free_report(cb: CallbackQuery, state: FSMContext):
         # Получаем данные компании
         client = ThrottledClient()
         try:
-            r = await client.get(url)
-            status = getattr(r, "status_code", None)
-            log.info("HTTP fetched", url=url, status=status, user_id=cb.from_user.id)
-            company = await parse_company_html(r.text, url=r.request.url.path)
+            if cb.data == "report_paid":
+                from scraping.multipage import fetch_company_bundle
+                company = await fetch_company_bundle(client, url)
+            else:
+                r = await client.get(url)
+                status = getattr(r, "status_code", None)
+                log.info("HTTP fetched", url=url, status=status, user_id=cb.from_user.id)
+                company = await parse_company_html(r.text, url=r.request.url.path)
         except Exception as e:
             status = getattr(getattr(e, "response", None), "status_code", None)
             log.warning("HTTP fetch failed", url=url, status=status, user_id=cb.from_user.id, exc_info=e)
@@ -170,6 +176,34 @@ async def free_report(cb: CallbackQuery, state: FSMContext):
         
         await cb.message.answer("❌ Не удалось сгенерировать PDF. Попробуйте позже.")
     
+    await cb.answer()
+
+@router.callback_query(F.data == "report_txt")
+async def report_txt(cb: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    selected = data.get("selected") or {}
+    url = selected.get("url") or f"/search?query={selected.get('inn','')}"
+    if not url:
+        await cb.answer("Сначала выберите компанию", show_alert=True)
+        return
+    try:
+        await cb.message.answer("⏳ Собираю текст со всех вкладок...")
+    except Exception:
+        pass
+
+    client = ThrottledClient()
+    try:
+        bundle = await fetch_all_texts(url, client, include_main=True)
+    finally:
+        await client.close()
+
+    import tempfile
+    from aiogram.types import FSInputFile
+    text = build_txt(bundle, source_url=url)
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as tmp:
+        tmp.write(text)
+        tmp_path = tmp.name
+    await cb.message.answer_document(FSInputFile(tmp_path, filename="company_dump.txt"))
     await cb.answer()
 
 @router.callback_query(F.data == "report_paid")

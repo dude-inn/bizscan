@@ -51,3 +51,8 @@ def setup_logging():
         _logger_initialized = True
     
     return structlog.get_logger("bizscan")
+
+
+def get_logger(name: str = "bizscan"):
+    """Получить логгер по имени"""
+    return structlog.get_logger(name)

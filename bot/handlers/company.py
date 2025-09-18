@@ -1,58 +1,124 @@
 # -*- coding: utf-8 -*-
-import os
+"""
+Обработчики для работы с компаниями (новая архитектура)
+"""
+import json
 import tempfile
+from typing import Optional
+
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from aiogram.fsm.context import FSMContext
+from aiogram.types import FSInputFile
+
 from bot.states import SearchState, ReportState
 from bot.keyboards.main import choose_report_kb, report_menu_kb
-from aiogram.types import FSInputFile
-from scraping.client import ThrottledClient
-from domain.models import CompanyFull
-from scraping.company import parse_company_html
-from reports.renderer import render_free, render_full
-from reports.pdf import generate_pdf
+from services.aggregator import fetch_company_profile
+from domain.models import CompanyAggregate
 from core.logger import setup_logging
-from settings import GENERATE_PDF_FREE
-from scraping.multipage_txt import fetch_all_texts
-from services.text_dump import build_txt
+from settings import (
+    DADATA_API_KEY, DADATA_SECRET_KEY,
+    MSME_DATA_URL, MSME_LOCAL_FILE, FEATURE_MSME,
+    EFRSB_API_URL, EFRSB_API_KEY, FEATURE_EFRSB,
+    KAD_API_URL, KAD_API_KEY, FEATURE_KAD, KAD_MAX_CASES,
+    REQUEST_TIMEOUT, MAX_RETRIES
+)
 
 router = Router(name="company")
 log = setup_logging()
 
 
-def _split_text(text: str, limit: int = 4096):
-    if len(text) <= limit:
-        yield text
-        return
-    start = 0
-    while start < len(text):
-        end = min(len(text), start + limit)
-        # стараемся резать по переводу строки
-        nl = text.rfind("\n", start, end)
-        if nl != -1 and nl > start:
-            yield text[start:nl]
-            start = nl + 1
+def _format_company_response(company: CompanyAggregate) -> str:
+    """Форматирует ответ с информацией о компании"""
+    base = company.base
+    
+    # Заголовок
+    response = f"🧾 **Реквизиты**\n"
+    response += f"{base.name_full}"
+    if base.name_short and base.name_short != base.name_full:
+        response += f" • {base.name_short}"
+    response += f"\nИНН {base.inn}"
+    if base.ogrn:
+        response += f" • ОГРН {base.ogrn}"
+    if base.kpp:
+        response += f" • КПП {base.kpp}"
+    
+    # Адрес
+    if base.address:
+        qc_info = f" (qc={base.address_qc})" if base.address_qc else ""
+        response += f"\n📍 **Адрес:** {base.address}{qc_info}"
+    
+    # Даты и статус
+    if base.registration_date:
+        response += f"\n📅 **Регистрация:** {base.registration_date.strftime('%Y-%m-%d')}"
+    if base.liquidation_date:
+        response += f" • **Ликвидация:** {base.liquidation_date.strftime('%Y-%m-%d')}"
+    
+    status_emoji = {
+        "ACTIVE": "✅",
+        "LIQUIDATING": "⚠️", 
+        "LIQUIDATED": "❌",
+        "UNKNOWN": "❓"
+    }
+    response += f"\n**Статус:** {status_emoji.get(base.status, '❓')} {base.status}"
+    
+    # ОКВЭД
+    if base.okved:
+        response += f"\n🏷️ **ОКВЭД:** {base.okved}"
+    
+    # Руководитель
+    if base.management_name:
+        post = f" — {base.management_post}" if base.management_post else ""
+        response += f"\n\n🧑‍💼 **Руководитель**\n{base.management_name}{post}"
+    
+    # МСП
+    if company.msme and company.msme.is_msme:
+        category_names = {
+            "micro": "микро",
+            "small": "малое", 
+            "medium": "среднее"
+        }
+        category = category_names.get(company.msme.category, company.msme.category)
+        period = f" (на {company.msme.period})" if company.msme.period else ""
+        response += f"\n\n🧩 **МСП**\nКатегория: {category}{period}"
+    elif company.msme:
+        response += f"\n\n🧩 **МСП**\nНе является субъектом МСП"
+    
+    # Банкротство
+    if company.bankruptcy:
+        if company.bankruptcy.has_bankruptcy_records:
+            response += f"\n\n⚖️ **Банкротство**\nНайдено {len(company.bankruptcy.records)} записей"
+            for i, record in enumerate(company.bankruptcy.records[:3], 1):
+                response += f"\n{i}. {record.get('number', 'N/A')} — {record.get('stage', 'N/A')}"
         else:
-            yield text[start:end]
-            start = end
+            response += f"\n\n⚖️ **Банкротство**\nНет записей"
+    
+    # Арбитраж
+    if company.arbitration and company.arbitration.total > 0:
+        response += f"\n\n📄 **Арбитраж** (последние {len(company.arbitration.cases)} из {company.arbitration.total})"
+        for i, case in enumerate(company.arbitration.cases[:3], 1):
+            roles = ", ".join(case.get("roles", []))
+            date_str = case.get("date", "N/A")
+            instance = case.get("instance", "N/A")
+            response += f"\n{i}. {case.get('number', 'N/A')} — {roles}, {date_str} — {instance}"
+    elif company.arbitration:
+        response += f"\n\n📄 **Арбитраж**\nНет дел"
+    
+    # Источники
+    sources = []
+    for source, version in company.sources.items():
+        sources.append(f"{source} ({version})")
+    response += f"\n\n🔗 **Источники:** {', '.join(sources)}"
+    
+    return response
 
-
-def _sanitize_outgoing_text(text: str) -> str:
-    # Убираем упоминания источника
-    if not text:
-        return text
-    lowered = text.lower()
-    if "rusprofile" in lowered or "rusprofile.ru" in lowered:
-        # простая замена домена и слова
-        text = text.replace("rusprofile.ru", "").replace("Rusprofile", "").replace("RUSPROFILE", "")
-    return text
 
 @router.callback_query(F.data == "back_results")
 async def back_results(cb: CallbackQuery, state: FSMContext):
     await cb.message.answer("Возвращаемся к результатам…")
     await cb.answer()
     await __import__("bot.handlers.search", fromlist=['']).show_page(cb.message, state)
+
 
 @router.callback_query(F.data == "back_main")
 async def back_main(cb: CallbackQuery, state: FSMContext):
@@ -71,317 +137,176 @@ async def back_main(cb: CallbackQuery, state: FSMContext):
     
     await cb.answer()
 
+
 @router.callback_query(F.data == "report_free")
 async def free_report(cb: CallbackQuery, state: FSMContext):
-    print(f"DEBUG: free_report handler called with data: {cb.data}")
+    """Генерация бесплатного отчёта"""
     log.info("free_report: handler called", callback_data=cb.data, user_id=cb.from_user.id)
-    log.debug("free_report: starting report generation", user_id=cb.from_user.id, callback_data=cb.data)
+    
+    await cb.answer()
     
     # Показываем индикатор загрузки
-    try:
-        await cb.message.edit_text("⏳ Формирую отчёт...")
-    except Exception:
-        await cb.message.answer("⏳ Формирую отчёт...")
+    status_msg = await cb.message.answer("⏳ Собираю данные о компании...")
     
     try:
-        # Получаем данные компании из состояния
+        # Получаем данные из состояния
+        log.info("Getting state data", user_id=cb.from_user.id)
         data = await state.get_data()
-        selected = data.get("selected") or {}
-        url = selected.get("url") or f"/search?query={selected.get('inn','')}"
+        query = data.get("query", "")
+        log.info("State data retrieved", query=query, user_id=cb.from_user.id)
         
-        log.debug("HTTP fetch", url=url, user_id=cb.from_user.id)
-        
-        # Получаем данные компании
-        client = ThrottledClient()
-        try:
-            if cb.data == "report_paid":
-                from scraping.multipage import fetch_company_bundle
-                company = await fetch_company_bundle(client, url)
-            else:
-                r = await client.get(url)
-                status = getattr(r, "status_code", None)
-                log.info("HTTP fetched", url=url, status=status, user_id=cb.from_user.id)
-                company = await parse_company_html(r.text, url=r.request.url.path)
-        except Exception as e:
-            status = getattr(getattr(e, "response", None), "status_code", None)
-            log.warning("HTTP fetch failed", url=url, status=status, user_id=cb.from_user.id, exc_info=e)
-            company = CompanyFull(
-                short_name=selected.get("name", "Неизвестная компания"),
-                inn=selected.get("inn", ""),
-                ogrn=selected.get("ogrn", ""),
-                address=selected.get("address"),
-                source_url=url,
-            )
-        finally:
-            await client.close()
-        
-        log.info("free_report: company data received", 
-                company_name=company.short_name, 
-                inn=company.inn, 
-                ogrn=company.ogrn,
-                has_contacts=bool(company.contacts),
-                user_id=cb.from_user.id)
-        
-        log.debug("PDF generate", mode="free", user_id=cb.from_user.id)
-        
-        # Генерируем PDF
-        try:
-            log.debug("free_report: generating PDF via reports.pdf.generate_pdf", user_id=cb.from_user.id)
-            pdf_bytes = generate_pdf(company, "free")
-        except Exception as pdf_err:
-            # Graceful fallback: отправляем текстовый отчёт через renderer
-            log.warning("PDF failed; ensure DejaVu fonts in assets/fonts (see README). Falling back to text.", mode="free", user_id=cb.from_user.id, exc_info=pdf_err)
-            try:
-                blocks = render_free(company)
-                if isinstance(blocks, (list, tuple)):
-                    for block in blocks:
-                        await cb.message.answer(block)
-                else:
-                    await cb.message.answer(str(blocks))
-            except Exception as render_err:
-                log.exception("free_report: render_free failed", exc_info=render_err, user_id=cb.from_user.id)
-                fallback = [
-                    "📄 Бесплатный отчёт (текст):",
-                    f"Название: {company.short_name or '-'}",
-                    f"ИНН: {company.inn or '-'}",
-                    f"ОГРН: {company.ogrn or '-'}",
-                    f"КПП: {getattr(company, 'kpp', '-') or '-'}",
-                    f"Адрес: {company.address or '-'}",
-                    f"Руководитель: {company.director or '-'}",
-                ]
-                if company.okved_main:
-                    fallback.append(f"ОКВЭД (осн.): {company.okved_main}")
-                await cb.message.answer("\n".join(fallback))
-            await cb.answer()
+        if not query:
+            log.warning("No query in state", user_id=cb.from_user.id)
+            await status_msg.edit_text("❌ Не указан поисковый запрос")
             return
         
-        log.info("PDF generated", mode="free", size=len(pdf_bytes), user_id=cb.from_user.id)
-        
-        # Отправляем PDF как документ
-        log.debug("PDF send", mode="free", size=len(pdf_bytes), user_id=cb.from_user.id)
-        await cb.message.answer_document(
-            document=BufferedInputFile(pdf_bytes, filename=f"{company.short_name}_free_report.pdf"),
-            caption=f"📊 Бесплатный отчёт по компании {company.short_name}"
+        # Получаем профиль компании
+        log.info("Fetching company profile", query=query, user_id=cb.from_user.id)
+        company = await fetch_company_profile(
+            query=query,
+            dadata_api_key=DADATA_API_KEY,
+            dadata_secret_key=DADATA_SECRET_KEY,
+            msme_data_url=MSME_DATA_URL,
+            msme_local_file=MSME_LOCAL_FILE,
+            efrsb_api_url=EFRSB_API_URL,
+            efrsb_api_key=EFRSB_API_KEY,
+            efrsb_enabled=FEATURE_EFRSB,
+            kad_api_url=KAD_API_URL,
+            kad_api_key=KAD_API_KEY,
+            kad_enabled=FEATURE_KAD,
+            kad_max_cases=KAD_MAX_CASES,
+            request_timeout=REQUEST_TIMEOUT,
+            max_retries=MAX_RETRIES
         )
-        log.info("PDF sent", mode="free", size=len(pdf_bytes), user_id=cb.from_user.id)
-        # Подтверждение без дублирования кнопок
-        await cb.message.answer("✅ Бесплатный отчёт готов!")
+        
+        if not company:
+            log.warning("Company not found", query=query, user_id=cb.from_user.id)
+            await status_msg.edit_text("❌ Компания не найдена")
+            return
+        
+        log.info("Company profile fetched successfully", 
+                company_name=company.base.name_full,
+                inn=company.base.inn,
+                user_id=cb.from_user.id)
+        
+        # Форматируем ответ
+        log.info("Formatting company response", user_id=cb.from_user.id)
+        response = _format_company_response(company)
+        
+        # Разбиваем на части если слишком длинный
+        log.info("Checking response length", response_length=len(response), user_id=cb.from_user.id)
+        if len(response) > 4096:
+            log.info("Response too long, splitting into parts", user_id=cb.from_user.id)
+            parts = []
+            current = ""
+            for line in response.split('\n'):
+                if len(current + line + '\n') > 4000:
+                    parts.append(current.strip())
+                    current = line + '\n'
+                else:
+                    current += line + '\n'
+            if current.strip():
+                parts.append(current.strip())
+            
+            log.info("Response split into parts", parts_count=len(parts), user_id=cb.from_user.id)
+            # Отправляем части
+            for i, part in enumerate(parts):
+                if i == 0:
+                    await status_msg.edit_text(part, parse_mode="Markdown")
+                else:
+                    await cb.message.answer(part, parse_mode="Markdown")
+        else:
+            log.info("Sending single response", user_id=cb.from_user.id)
+            await status_msg.edit_text(response, parse_mode="Markdown")
+        
+        # Добавляем кнопку для скачивания JSON
+        log.info("Adding keyboard buttons", user_id=cb.from_user.id)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📄 Скачать JSON", callback_data="download_json")],
+            [InlineKeyboardButton(text="🔍 Новый поиск", callback_data="search_inn")],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_main")]
+        ])
+        
+        await cb.message.answer(
+            "✅ Данные получены!",
+            reply_markup=keyboard
+        )
+        log.info("Free report completed successfully", user_id=cb.from_user.id)
+        
+        # Сохраняем данные в состоянии для скачивания JSON
+        await state.update_data(company_data=company.dict())
         
     except Exception as e:
-        log.error("free_report: PDF generation failed", 
+        log.error("Free report failed", 
                  error=str(e), 
-                 error_type=type(e).__name__,
                  user_id=cb.from_user.id,
-                 exc_info=True)
-        
-        await cb.message.answer("❌ Не удалось сгенерировать PDF. Попробуйте позже.")
+                 query=query if 'query' in locals() else None)
+        await status_msg.edit_text(f"❌ Ошибка при получении данных: {str(e)}")
+
+
+@router.callback_query(F.data == "download_json")
+async def download_json(cb: CallbackQuery, state: FSMContext):
+    """Скачивание JSON данных"""
+    log.info("download_json: handler called", callback_data=cb.data, user_id=cb.from_user.id)
     
     await cb.answer()
-
-@router.callback_query(F.data == "report_txt")
-async def report_txt(cb: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    selected = data.get("selected") or {}
-    url = selected.get("url") or f"/search?query={selected.get('inn','')}"
-    if not url:
-        await cb.answer("Сначала выберите компанию", show_alert=True)
-        return
+    
     try:
-        await cb.message.answer("⏳ Собираю текст со всех вкладок...")
-    except Exception:
-        pass
+        # Получаем данные из состояния
+        data = await state.get_data()
+        company_data = data.get("company_data")
+        
+        if not company_data:
+            await cb.message.answer("❌ Данные не найдены. Выполните поиск заново.")
+            return
+        
+        # Создаем JSON файл
+        json_str = json.dumps(company_data, ensure_ascii=False, indent=2, default=str)
+        
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as tmp:
+            tmp.write(json_str)
+            tmp_path = tmp.name
+        
+        # Отправляем файл
+        company_name = company_data.get("base", {}).get("name_short", "company")
+        filename = f"{company_name}_data.json"
+        
+        await cb.message.answer_document(
+            FSInputFile(tmp_path, filename=filename),
+            caption="📄 JSON данные о компании"
+        )
+        
+        # Удаляем временный файл
+        import os
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+        
+    except Exception as e:
+        log.exception("download_json: failed", exc_info=e)
+        await cb.message.answer(f"❌ Ошибка при создании JSON: {str(e)}")
 
-    client = ThrottledClient()
-    try:
-        bundle = await fetch_all_texts(url, client, include_main=True)
-    finally:
-        await client.close()
-
-    import tempfile
-    from aiogram.types import FSInputFile
-    text = build_txt(bundle, source_url=url)
-    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as tmp:
-        tmp.write(text)
-        tmp_path = tmp.name
-    await cb.message.answer_document(FSInputFile(tmp_path, filename="company_dump.txt"))
-    await cb.answer()
 
 @router.callback_query(F.data == "report_paid")
 async def paid_report(cb: CallbackQuery, state: FSMContext):
+    """Платный отчёт (пока не реализован)"""
     log.info("paid_report: handler called", callback_data=cb.data, user_id=cb.from_user.id)
     
-    # Показываем индикатор загрузки
-    try:
-        await cb.message.edit_text("⏳ Формирую полный отчёт...")
-    except Exception:
-        await cb.message.answer("⏳ Формирую полный отчёт...")
-    
-    try:
-        data = await state.get_data()
-        selected = data.get("selected") or {}
-        url = selected.get("url") or f"/search?query={selected.get('inn','')}"
-        
-        # Получаем данные компании
-        client = ThrottledClient()
-        try:
-            r = await client.get(url)
-            company = await parse_company_html(r.text, url=r.request.url.path)
-        except Exception as e:
-            log.exception("Company page fetch/parse failed", exc_info=e)
-            company = CompanyFull(
-                short_name=selected.get("name", "Неизвестная компания"),
-                inn=selected.get("inn", ""),
-                ogrn=selected.get("ogrn", ""),
-                address=selected.get("address"),
-                source_url=url,
-            )
-        finally:
-            await client.close()
-            
-        # Генерируем и отправляем PDF вместо текста
-        tmp_path = None
-        try:
-            pdf_bytes = generate_pdf(company, "full")
-            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-                tmp.write(pdf_bytes)
-                tmp_path = tmp.name
-            await cb.message.answer_document(
-                FSInputFile(tmp_path, filename="bizscan_report_full.pdf")
-            )
-            log.info("PDF sent (full)")
-            # Подтверждение без кнопки скачивания, т.к. файл уже отправлен
-            await cb.message.answer("✅ Полный отчёт готов!")
-        except Exception as e:
-            log.exception("PDF generation/send failed (full)", exc_info=e)
-            await cb.message.answer("Не удалось сгенерировать PDF. Попробуйте позже.")
-        finally:
-            if tmp_path:
-                try:
-                    os.unlink(tmp_path)
-                except Exception:
-                    pass
-        await cb.answer()
-        
-    except Exception as e:
-        log.exception("paid_report: unexpected error", exc_info=e)
-        await cb.message.answer("Произошла ошибка при формировании отчёта.")
-        await cb.answer()
+    await cb.answer()
+    await cb.message.answer(
+        "💰 Платные отчёты пока не реализованы.\n"
+        "Используйте бесплатный отчёт для получения базовой информации."
+    )
 
-@router.callback_query(F.data == "download_pdf_free")
-async def download_pdf_free(cb: CallbackQuery, state: FSMContext):
-    log.info("download_pdf_free: handler called", callback_data=cb.data, user_id=cb.from_user.id)
-    
-    try:
-        await cb.message.edit_text("⏳ Генерирую PDF...")
-    except Exception:
-        await cb.message.answer("⏳ Генерирую PDF...")
-    
-    try:
-        data = await state.get_data()
-        selected = data.get("selected") or {}
-        url = selected.get("url") or f"/search?query={selected.get('inn','')}"
-        
-        # Получаем данные компании
-        client = ThrottledClient()
-        try:
-            r = await client.get(url)
-            company = await parse_company_html(r.text, url=r.request.url.path)
-        except Exception as e:
-            log.exception("Company page fetch/parse failed", exc_info=e)
-            company = CompanyFull(
-                short_name=selected.get("name", "Неизвестная компания"),
-                inn=selected.get("inn", ""),
-                ogrn=selected.get("ogrn", ""),
-                address=selected.get("address"),
-                source_url=url,
-            )
-        finally:
-            await client.close()
-            
-        # Генерируем PDF
-        log.info("Starting PDF generation for free report")
-        pdf_bytes = generate_pdf(company, "free")
-        log.info("PDF generated successfully", size=len(pdf_bytes))
-        
-        # Сохраняем во временный файл и отправляем
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(pdf_bytes)
-            tmp_path = tmp.name
-        log.info("PDF written to temp file", path=tmp_path)
-        
-        await cb.message.answer_document(
-            FSInputFile(tmp_path, filename="bizscan_report_free.pdf")
-        )
-        log.info("PDF sent to user successfully")
-        
-        # Удаляем временный файл
-        try:
-            os.unlink(tmp_path)
-            log.info("PDF temp file deleted")
-        except Exception as e:
-            log.warning("Failed to delete temp file", exc_info=e)
-            
-        await cb.answer("PDF готов!")
-        
-    except Exception as e:
-        log.exception("download_pdf_free: unexpected error", exc_info=e)
-        await cb.message.answer("Не удалось сгенерировать PDF. Попробуйте позже.")
-        await cb.answer()
 
-@router.callback_query(F.data == "download_pdf_full")
-async def download_pdf_full(cb: CallbackQuery, state: FSMContext):
-    log.info("download_pdf_full: handler called", callback_data=cb.data, user_id=cb.from_user.id)
+@router.callback_query(F.data == "report_txt")
+async def report_txt(cb: CallbackQuery, state: FSMContext):
+    """Текстовый дамп (устаревший функционал)"""
+    log.info("report_txt: handler called", callback_data=cb.data, user_id=cb.from_user.id)
     
-    try:
-        await cb.message.edit_text("⏳ Генерирую PDF...")
-    except Exception:
-        await cb.message.answer("⏳ Генерирую PDF...")
-    
-    try:
-        data = await state.get_data()
-        selected = data.get("selected") or {}
-        url = selected.get("url") or f"/search?query={selected.get('inn','')}"
-        
-        # Получаем данные компании
-        client = ThrottledClient()
-        try:
-            r = await client.get(url)
-            company = await parse_company_html(r.text, url=r.request.url.path)
-        except Exception as e:
-            log.exception("Company page fetch/parse failed", exc_info=e)
-            company = CompanyFull(
-                short_name=selected.get("name", "Неизвестная компания"),
-                inn=selected.get("inn", ""),
-                ogrn=selected.get("ogrn", ""),
-                address=selected.get("address"),
-                source_url=url,
-            )
-        finally:
-            await client.close()
-            
-        # Генерируем PDF
-        pdf_bytes = generate_pdf(company, "full")
-        
-        # Сохраняем во временный файл и отправляем
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(pdf_bytes)
-            tmp_path = tmp.name
-        
-        await cb.message.answer_document(
-            FSInputFile(tmp_path, filename="bizscan_report_full.pdf")
-        )
-        
-        # Удаляем временный файл
-        try:
-            os.unlink(tmp_path)
-        except Exception as e:
-            log.warning("Failed to delete temp file", exc_info=e)
-            
-        await cb.answer("PDF готов!")
-        
-    except Exception as e:
-        log.exception("download_pdf_full: unexpected error", exc_info=e)
-        await cb.message.answer("Не удалось сгенерировать PDF. Попробуйте позже.")
-        await cb.answer()
-
-# Удален общий обработчик, который перехватывал все callback'и
+    await cb.answer()
+    await cb.message.answer(
+        "📝 Текстовые дампы заменены на структурированные данные.\n"
+        "Используйте бесплатный отчёт для получения информации о компании."
+    )

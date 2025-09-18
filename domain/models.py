@@ -1,84 +1,65 @@
 # -*- coding: utf-8 -*-
+"""
+Доменные модели для агрегации данных о компаниях
+"""
+from datetime import date, datetime
+from typing import Literal, Optional, List, Dict
+
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
 
-class CompanyBrief(BaseModel):
-    name: str
-    inn: str
-    ogrn: Optional[str] = None
-    region: Optional[str] = None
-    url: Optional[str] = None
 
-class FinanceYear(BaseModel):
-    year: int
-    revenue: Optional[str] = None  # Изменено на str для хранения форматированных значений
-    profit: Optional[str] = None
-    assets: Optional[str] = None
-    liabilities: Optional[str] = None
+class CompanyBase(BaseModel):
+    """Базовая информация о компании"""
+    inn: str = Field(..., description="ИНН компании")
+    ogrn: Optional[str] = Field(None, description="ОГРН компании")
+    kpp: Optional[str] = Field(None, description="КПП компании")
+    name_full: str = Field(..., description="Полное наименование")
+    name_short: Optional[str] = Field(None, description="Краткое наименование")
+    registration_date: Optional[date] = Field(None, description="Дата регистрации")
+    liquidation_date: Optional[date] = Field(None, description="Дата ликвидации")
+    status: Literal["ACTIVE", "LIQUIDATING", "LIQUIDATED", "UNKNOWN"] = Field(
+        "UNKNOWN", description="Статус компании"
+    )
+    okved: Optional[str] = Field(None, description="Основной ОКВЭД")
+    address: Optional[str] = Field(None, description="Адрес")
+    address_qc: Optional[str] = Field(None, description="Код качества адреса от DaData")
+    management_name: Optional[str] = Field(None, description="ФИО руководителя")
+    management_post: Optional[str] = Field(None, description="Должность руководителя")
+    authorized_capital: Optional[str] = Field(None, description="Уставный капитал")
 
-class Flags(BaseModel):
-    # Старые поля для совместимости
-    arbitration: Optional[bool] = None
-    bankruptcy: Optional[bool] = None
-    exec_proceedings: Optional[bool] = None
-    inspections: Optional[bool] = None
-    
-    # Новые правовые индикаторы
-    mass_director: Optional[bool] = None
-    mass_founder: Optional[bool] = None
-    unreliable_address: Optional[bool] = None
-    unreliable_director: Optional[bool] = None
-    unreliable_founder: Optional[bool] = None
-    tax_debt: Optional[bool] = None
-    disqualified: Optional[bool] = None
-    unreliable_supplier: Optional[bool] = None
 
-class License(BaseModel):
-    type: str
-    number: Optional[str] = None
-    date: Optional[str] = None
-    authority: Optional[str] = None
+class MsmeInfo(BaseModel):
+    """Информация о статусе МСП"""
+    is_msme: bool = Field(False, description="Является ли субъектом МСП")
+    category: Optional[Literal["micro", "small", "medium"]] = Field(
+        None, description="Категория МСП"
+    )
+    period: Optional[str] = Field(None, description="Период данных (YYYY-MM)")
 
-class Founder(BaseModel):
-    name: str
-    share: Optional[str] = None
 
-class CompanyFull(BaseModel):
-    short_name: Optional[str] = None
-    full_name: Optional[str] = None
-    status: Optional[str] = None
-    reg_date: Optional[str] = None
-    address: Optional[str] = None
-    director: Optional[str] = None
-    inn: Optional[str] = None
-    kpp: Optional[str] = None
-    ogrn: Optional[str] = None
-    ogrn_date: Optional[str] = None
-    okved_main: Optional[str] = None
-    okved_additional: List[str] = Field(default_factory=list)  # Переименовано из okved_extra
-    stats_codes: Dict[str, str] = Field(default_factory=dict)
-    msp_status: Optional[str] = None
-    tax_authority: Optional[str] = None
-    founders: List[Founder] = Field(default_factory=list)  # Изменено на список объектов Founder
-    contacts: Dict[str, List[str]] = Field(default_factory=dict)  # phone/email/site
-    staff: Optional[str] = None
-    avg_salary: Optional[str] = None
-    finance: List[FinanceYear] = Field(default_factory=list)
-    flags: Flags = Field(default_factory=Flags)
-    licenses: List[License] = Field(default_factory=list)  # Новое поле для лицензий
-    source_url: Optional[str] = None
-    # Расширенные поля (не ломаем совместимость)
-    authorized_capital: Optional[str] = None
-    okved_main_code: Optional[str] = None
-    okved_main_title: Optional[str] = None
-    codes: Dict[str, str] = Field(default_factory=dict)
-    finance_summary: Dict[str, Any] = Field(default_factory=dict)
-    reliability: Dict[str, Any] = Field(default_factory=dict)
-    executions: Dict[str, Any] = Field(default_factory=dict)
-    procurements: Dict[str, Any] = Field(default_factory=dict)
-    checks: Dict[str, Any] = Field(default_factory=dict)
-    trademarks: Dict[str, Any] = Field(default_factory=dict)
-    events: Dict[str, Any] = Field(default_factory=dict)
-    registry_holder: Optional[str] = None
-    headcount: Optional[str] = None
-    extra: Dict[str, Any] = Field(default_factory=dict)
+class BankruptcyInfo(BaseModel):
+    """Информация о банкротстве"""
+    has_bankruptcy_records: bool = Field(False, description="Есть ли записи о банкротстве")
+    records: List[Dict] = Field(default_factory=list, description="Список записей")
+
+
+class ArbitrationInfo(BaseModel):
+    """Информация об арбитражных делах"""
+    total: int = Field(0, description="Общее количество дел")
+    cases: List[Dict] = Field(default_factory=list, description="Список дел")
+
+
+class CompanyAggregate(BaseModel):
+    """Агрегированная информация о компании"""
+    base: CompanyBase = Field(..., description="Базовая информация")
+    msme: Optional[MsmeInfo] = Field(None, description="Информация о МСП")
+    bankruptcy: Optional[BankruptcyInfo] = Field(None, description="Информация о банкротстве")
+    arbitration: Optional[ArbitrationInfo] = Field(None, description="Информация об арбитраже")
+    fetched_at: datetime = Field(default_factory=datetime.now, description="Время получения данных")
+    sources: Dict[str, str] = Field(default_factory=dict, description="Источники данных")
+
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat(),
+            date: lambda v: v.isoformat(),
+        }

@@ -16,10 +16,30 @@ CREATE TABLE IF NOT EXISTS search_cache (
 '''
 
 async def init_db(path: str):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    async with aiosqlite.connect(path) as db:
-        await db.executescript(DDL)
-        await db.commit()
+    from core.logger import setup_logging
+    log = setup_logging()
+    
+    try:
+        log.info("Initializing database", db_path=path)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        log.info("Database directory created", directory=os.path.dirname(path))
+    except Exception as e:
+        log.error("Failed to create database directory", error=str(e))
+        raise
+    
+    try:
+        log.info("Connecting to database")
+        async with aiosqlite.connect(path) as db:
+            log.info("Database connection established")
+            log.info("Executing DDL script")
+            await db.executescript(DDL)
+            log.info("DDL script executed successfully")
+            await db.commit()
+            log.info("Database transaction committed")
+        log.info("Database initialization completed successfully")
+    except Exception as e:
+        log.error("Failed to initialize database", error=str(e))
+        raise
 
 async def get_conn(path: str):
     return await aiosqlite.connect(path)

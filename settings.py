@@ -65,6 +65,26 @@ KAD_API_KEY = os.getenv("KAD_API_KEY")
 FEATURE_KAD = _get_bool("FEATURE_KAD", False)
 KAD_MAX_CASES = _get_int("KAD_MAX_CASES", 5)
 
+# === ГИР БО (финансы) ===
+GIRBO_BASE_URL = os.getenv("GIRBO_BASE_URL", "https://bo.nalog.gov.ru")
+GIRBO_TOKEN = os.getenv("GIRBO_TOKEN")
+FEATURE_GIRBO = _get_bool("FEATURE_GIRBO", True)
+
+# === ЕИС (госзакупки) ===
+ZAKUPKI_MODE = os.getenv("ZAKUPKI_MODE", "soap")
+ZAKUPKI_WSDL_URL = os.getenv("ZAKUPKI_WSDL_URL")
+ZAKUPKI_DATASET_URL = os.getenv("ZAKUPKI_DATASET_URL")
+FEATURE_ZAKUPKI = _get_bool("FEATURE_ZAKUPKI", False)
+
+# === РАР (лицензии алкоголь) ===
+FSRAR_API_URL = os.getenv("FSRAR_API_URL")
+FSRAR_DATASET_URL = os.getenv("FSRAR_DATASET_URL")
+FEATURE_FSRAR = _get_bool("FEATURE_FSRAR", False)
+
+# === Прозрачный бизнес ===
+PB_DATASETS = os.getenv("PB_DATASETS", "{}")
+FEATURE_PB = _get_bool("FEATURE_PB", True)
+
 # === Общие настройки ===
 REQUEST_TIMEOUT = _get_int("REQUEST_TIMEOUT", 10)
 MAX_RETRIES = _get_int("MAX_RETRIES", 2)

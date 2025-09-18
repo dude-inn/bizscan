@@ -104,6 +104,42 @@ def _format_company_response(company: CompanyAggregate) -> str:
     elif company.arbitration:
         response += f"\n\n📄 **Арбитраж**\nНет дел"
     
+    # Финансы (ГИР БО)
+    if company.finances:
+        response += f"\n\n📊 **Финансы (ГИР БО)**"
+        for finance in company.finances[-3:]:  # Последние 3 года
+            year = finance.period
+            revenue = f"{finance.revenue:,.0f}" if finance.revenue else "N/A"
+            profit = f"{finance.net_profit:,.0f}" if finance.net_profit else "N/A"
+            assets = f"{finance.assets:,.0f}" if finance.assets else "N/A"
+            response += f"\n{year}: выручка {revenue}₽, прибыль {profit}₽, активы {assets}₽"
+    
+    # Закупки (ЕИС)
+    if company.procurement:
+        contracts = company.procurement.total_contracts
+        amount = f"{company.procurement.total_amount:,.0f}₽" if company.procurement.total_amount else "N/A"
+        last_date = company.procurement.last_contract_date.strftime('%Y-%m-%d') if company.procurement.last_contract_date else "N/A"
+        response += f"\n\n🛒 **Закупки (ЕИС)**\nКонтрактов: {contracts}, сумма: {amount}, последний: {last_date}"
+    
+    # Лицензии (РАР)
+    if company.licenses:
+        active_licenses = [l for l in company.licenses if l.status == "ACTIVE"]
+        inactive_licenses = [l for l in company.licenses if l.status != "ACTIVE"]
+        
+        response += f"\n\n🥃 **Лицензии (РАР)**"
+        if active_licenses:
+            response += f"\nАктивные ({len(active_licenses)}):"
+            for license in active_licenses[:3]:
+                activity = license.activity or "N/A"
+                valid_to = license.valid_to.strftime('%Y-%m-%d') if license.valid_to else "N/A"
+                response += f"\n• {license.number} — {activity} (до {valid_to})"
+        
+        if inactive_licenses:
+            response += f"\nПрекращенные ({len(inactive_licenses)}):"
+            for license in inactive_licenses[:2]:
+                activity = license.activity or "N/A"
+                response += f"\n• {license.number} — {activity}"
+    
     # Источники
     sources = []
     for source, version in company.sources.items():
@@ -222,7 +258,7 @@ async def free_report(cb: CallbackQuery, state: FSMContext):
         # Добавляем кнопку для скачивания JSON
         log.info("Adding keyboard buttons", user_id=cb.from_user.id)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📄 Скачать JSON", callback_data="download_json")],
+            [InlineKeyboardButton(text="📝 Скачать TXT", callback_data="download_txt")],
             [InlineKeyboardButton(text="🔍 Новый поиск", callback_data="search_inn")],
             [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_main")]
         ])
@@ -234,7 +270,7 @@ async def free_report(cb: CallbackQuery, state: FSMContext):
         log.info("Free report completed successfully", user_id=cb.from_user.id)
         
         # Сохраняем данные в состоянии для скачивания JSON
-        await state.update_data(company_data=company.dict())
+        await state.update_data(company_data=company.dict(), company_text=response)
         
     except Exception as e:
         log.error("Free report failed", 
@@ -244,39 +280,35 @@ async def free_report(cb: CallbackQuery, state: FSMContext):
         await status_msg.edit_text(f"❌ Ошибка при получении данных: {str(e)}")
 
 
-@router.callback_query(F.data == "download_json")
-async def download_json(cb: CallbackQuery, state: FSMContext):
-    """Скачивание JSON данных"""
-    log.info("download_json: handler called", callback_data=cb.data, user_id=cb.from_user.id)
+@router.callback_query(F.data == "download_txt")
+async def download_txt(cb: CallbackQuery, state: FSMContext):
+    """Скачивание TXT отчёта"""
+    log.info("download_txt: handler called", callback_data=cb.data, user_id=cb.from_user.id)
     
     await cb.answer()
     
     try:
-        # Получаем данные из состояния
         data = await state.get_data()
+        company_text = data.get("company_text")
         company_data = data.get("company_data")
         
-        if not company_data:
+        if not company_text or not company_data:
             await cb.message.answer("❌ Данные не найдены. Выполните поиск заново.")
             return
         
-        # Создаем JSON файл
-        json_str = json.dumps(company_data, ensure_ascii=False, indent=2, default=str)
+        company_name = company_data.get("base", {}).get("name_short") or company_data.get("base", {}).get("name_full", "company")
+        safe_name = "".join(ch for ch in company_name if ch.isalnum() or ch in (" ", "_", "-"))[:64]
+        filename = f"{safe_name}_report.txt"
         
-        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as tmp:
-            tmp.write(json_str)
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as tmp:
+            tmp.write(company_text)
             tmp_path = tmp.name
-        
-        # Отправляем файл
-        company_name = company_data.get("base", {}).get("name_short", "company")
-        filename = f"{company_name}_data.json"
         
         await cb.message.answer_document(
             FSInputFile(tmp_path, filename=filename),
-            caption="📄 JSON данные о компании"
+            caption="📝 TXT отчёт о компании"
         )
         
-        # Удаляем временный файл
         import os
         try:
             os.unlink(tmp_path)
@@ -284,8 +316,8 @@ async def download_json(cb: CallbackQuery, state: FSMContext):
             pass
         
     except Exception as e:
-        log.exception("download_json: failed", exc_info=e)
-        await cb.message.answer(f"❌ Ошибка при создании JSON: {str(e)}")
+        log.exception("download_txt: failed", exc_info=e)
+        await cb.message.answer(f"❌ Ошибка при создании TXT: {str(e)}")
 
 
 @router.callback_query(F.data == "report_paid")

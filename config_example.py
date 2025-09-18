@@ -27,6 +27,26 @@ KAD_API_KEY = "your_kad_api_key_here"
 FEATURE_KAD = False
 KAD_MAX_CASES = 5
 
+# === ГИР БО (финансы) ===
+GIRBO_BASE_URL = "https://bo.nalog.gov.ru"
+GIRBO_TOKEN = "your_girbo_token_here"
+FEATURE_GIRBO = True
+
+# === ЕИС (госзакупки) ===
+ZAKUPKI_MODE = "soap"  # soap | dataset
+ZAKUPKI_WSDL_URL = "your_zakupki_wsdl_url_here"
+ZAKUPKI_DATASET_URL = "your_zakupki_dataset_url_here"
+FEATURE_ZAKUPKI = False
+
+# === РАР (лицензии алкоголь) ===
+FSRAR_API_URL = "your_fsrar_api_url_here"
+FSRAR_DATASET_URL = "your_fsrar_dataset_url_here"
+FEATURE_FSRAR = False
+
+# === Прозрачный бизнес ===
+PB_DATASETS = '{"addresses": "https://www.nalog.ru/opendata/...", "disqualification": "https://www.nalog.ru/opendata/..."}'
+FEATURE_PB = True
+
 # === Общие настройки ===
 REQUEST_TIMEOUT = 10
 MAX_RETRIES = 2

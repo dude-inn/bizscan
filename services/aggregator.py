@@ -7,11 +7,15 @@ import re
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
-from domain.models import CompanyAggregate, CompanyBase, MsmeInfo, BankruptcyInfo, ArbitrationInfo
+from domain.models import CompanyAggregate, CompanyBase, MsmeInfo, BankruptcyInfo, ArbitrationInfo, FinanceSnapshot, ProcurementStats, License
 from services.providers.dadata import get_company_by_inn, search_company_by_name
 from services.providers.msme import check_msme_status
 from services.providers.efrsb import check_bankruptcy_status
 from services.providers.kad import get_arbitration_cases
+from services.providers.girbo import get_company_finances
+from services.providers.pb_opendata import get_company_open_data
+from services.providers.zakupki import get_procurement_stats
+from services.providers.fsrar import get_fsrar_licenses
 from services.cache import get_cached, set_cached
 from core.logger import setup_logging
 
@@ -33,6 +37,19 @@ class AggregatorConfig:
         kad_api_key: Optional[str] = None,
         kad_enabled: bool = False,
         kad_max_cases: int = 5,
+        # Новые провайдеры
+        girbo_base_url: Optional[str] = None,
+        girbo_token: Optional[str] = None,
+        girbo_enabled: bool = True,
+        zakupki_mode: str = "soap",
+        zakupki_wsdl_url: Optional[str] = None,
+        zakupki_dataset_url: Optional[str] = None,
+        zakupki_enabled: bool = False,
+        fsrar_api_url: Optional[str] = None,
+        fsrar_dataset_url: Optional[str] = None,
+        fsrar_enabled: bool = False,
+        pb_datasets: Optional[Dict[str, str]] = None,
+        pb_enabled: bool = True,
         request_timeout: int = 10,
         max_retries: int = 2
     ):
@@ -47,6 +64,19 @@ class AggregatorConfig:
         self.kad_api_key = kad_api_key
         self.kad_enabled = kad_enabled
         self.kad_max_cases = kad_max_cases
+        # Новые провайдеры
+        self.girbo_base_url = girbo_base_url
+        self.girbo_token = girbo_token
+        self.girbo_enabled = girbo_enabled
+        self.zakupki_mode = zakupki_mode
+        self.zakupki_wsdl_url = zakupki_wsdl_url
+        self.zakupki_dataset_url = zakupki_dataset_url
+        self.zakupki_enabled = zakupki_enabled
+        self.fsrar_api_url = fsrar_api_url
+        self.fsrar_dataset_url = fsrar_dataset_url
+        self.fsrar_enabled = fsrar_enabled
+        self.pb_datasets = pb_datasets or {}
+        self.pb_enabled = pb_enabled
         self.request_timeout = request_timeout
         self.max_retries = max_retries
 
@@ -203,6 +233,105 @@ class CompanyAggregator:
             log.error("Arbitration check failed", inn=inn, error=str(e))
             return None
     
+    async def _get_finances_info(self, inn: str) -> List[FinanceSnapshot]:
+        """Получает финансовые показатели из ГИР БО"""
+        if not self.config.girbo_enabled or not self.config.girbo_base_url:
+            return []
+        
+        try:
+            cache_key = f"finances_{inn}"
+            cached = await get_cached(cache_key)
+            if cached:
+                return [FinanceSnapshot(**item) for item in cached]
+            
+            finances = await get_company_finances(
+                inn,
+                self.config.girbo_base_url,
+                self.config.girbo_token
+            )
+            
+            # Кэшируем на 30 дней
+            await set_cached(cache_key, [f.dict() for f in finances], ttl_hours=24 * 30)
+            return finances
+            
+        except Exception as e:
+            log.error("Finances check failed", inn=inn, error=str(e))
+            return []
+    
+    async def _get_procurement_info(self, inn: str) -> Optional[ProcurementStats]:
+        """Получает статистику по госзакупкам"""
+        if not self.config.zakupki_enabled:
+            return None
+        
+        try:
+            cache_key = f"procurement_{inn}"
+            cached = await get_cached(cache_key)
+            if cached:
+                return ProcurementStats(**cached)
+            
+            procurement_stats = await get_procurement_stats(
+                inn,
+                self.config.zakupki_mode,
+                self.config.zakupki_wsdl_url,
+                self.config.zakupki_dataset_url
+            )
+            
+            if procurement_stats:
+                # Кэшируем на 14 дней
+                await set_cached(cache_key, procurement_stats.dict(), ttl_hours=24 * 14)
+            
+            return procurement_stats
+            
+        except Exception as e:
+            log.error("Procurement check failed", inn=inn, error=str(e))
+            return None
+    
+    async def _get_licenses_info(self, inn: str) -> List[License]:
+        """Получает лицензии РАР"""
+        if not self.config.fsrar_enabled:
+            return []
+        
+        try:
+            cache_key = f"licenses_{inn}"
+            cached = await get_cached(cache_key)
+            if cached:
+                return [License(**item) for item in cached]
+            
+            licenses = await get_fsrar_licenses(
+                inn,
+                self.config.fsrar_api_url,
+                self.config.fsrar_dataset_url
+            )
+            
+            # Кэшируем на 30 дней
+            await set_cached(cache_key, [l.dict() for l in licenses], ttl_hours=24 * 30)
+            return licenses
+            
+        except Exception as e:
+            log.error("Licenses check failed", inn=inn, error=str(e))
+            return []
+    
+    async def _get_open_data_info(self, inn: str) -> Dict[str, Any]:
+        """Получает открытые данные о компании"""
+        if not self.config.pb_enabled or not self.config.pb_datasets:
+            return {}
+        
+        try:
+            cache_key = f"open_data_{inn}"
+            cached = await get_cached(cache_key)
+            if cached:
+                return cached
+            
+            open_data = await get_company_open_data(inn, self.config.pb_datasets)
+            
+            # Кэшируем на 7 дней
+            await set_cached(cache_key, open_data, ttl_hours=24 * 7)
+            return open_data
+            
+        except Exception as e:
+            log.error("Open data check failed", inn=inn, error=str(e))
+            return {}
+    
     async def fetch_company_profile(self, query: str) -> Optional[CompanyAggregate]:
         """Получает полный профиль компании"""
         query = self._normalize_query(query)
@@ -244,7 +373,11 @@ class CompanyAggregator:
         tasks = [
             self._get_msme_info(company_base.inn),
             self._get_bankruptcy_info(company_base.inn),
-            self._get_arbitration_info(company_base.inn)
+            self._get_arbitration_info(company_base.inn),
+            self._get_finances_info(company_base.inn),
+            self._get_procurement_info(company_base.inn),
+            self._get_licenses_info(company_base.inn),
+            self._get_open_data_info(company_base.inn)
         ]
         
         try:
@@ -253,22 +386,42 @@ class CompanyAggregator:
             log.info("Parallel data fetching completed")
         except Exception as e:
             log.error("Failed to fetch additional data", error=str(e))
-            results = [None, None, None]
+            results = [None] * 7
         
         msme_info = results[0] if not isinstance(results[0], Exception) else None
         bankruptcy_info = results[1] if not isinstance(results[1], Exception) else None
         arbitration_info = results[2] if not isinstance(results[2], Exception) else None
+        finances = results[3] if not isinstance(results[3], Exception) else []
+        procurement = results[4] if not isinstance(results[4], Exception) else None
+        licenses = results[5] if not isinstance(results[5], Exception) else []
+        open_data = results[6] if not isinstance(results[6], Exception) else {}
         
         log.info("Additional data fetched", 
                 msme_success=msme_info is not None,
                 bankruptcy_success=bankruptcy_info is not None,
-                arbitration_success=arbitration_info is not None)
+                arbitration_success=arbitration_info is not None,
+                finances_success=len(finances) > 0,
+                procurement_success=procurement is not None,
+                licenses_success=len(licenses) > 0,
+                open_data_success=bool(open_data))
         
         # Формируем источники данных
         sources = {
             "DaData": "API v4.1",
             "Реестр МСП": "Открытые данные ФНС"
         }
+        
+        if self.config.girbo_enabled and finances:
+            sources["ГИР БО"] = "ФНС"
+        
+        if self.config.zakupki_enabled and procurement:
+            sources["ЕИС"] = "zakupki.gov.ru"
+        
+        if self.config.fsrar_enabled and licenses:
+            sources["РАР"] = "fsrar.gov.ru"
+        
+        if self.config.pb_enabled and open_data:
+            sources["Прозрачный бизнес"] = "pb.nalog.ru"
         
         if self.config.efrsb_enabled:
             sources["ЕФРСБ"] = "API-провайдер"
@@ -283,6 +436,9 @@ class CompanyAggregator:
                 msme=msme_info,
                 bankruptcy=bankruptcy_info,
                 arbitration=arbitration_info,
+                finances=finances,
+                procurement=procurement,
+                licenses=licenses,
                 sources=sources
             )
             log.info("Company profile created successfully", 

@@ -34,6 +34,26 @@ class Settings:
     FEATURE_KAD: bool
     KAD_MAX_CASES: int
     
+    # ГИР БО
+    GIRBO_BASE_URL: str
+    GIRBO_TOKEN: Optional[str]
+    FEATURE_GIRBO: bool
+    
+    # ЕИС (госзакупки)
+    ZAKUPKI_MODE: str
+    ZAKUPKI_WSDL_URL: Optional[str]
+    ZAKUPKI_DATASET_URL: Optional[str]
+    FEATURE_ZAKUPKI: bool
+    
+    # РАР (лицензии алкоголь)
+    FSRAR_API_URL: Optional[str]
+    FSRAR_DATASET_URL: Optional[str]
+    FEATURE_FSRAR: bool
+    
+    # Прозрачный бизнес
+    PB_DATASETS: str  # JSON строка
+    FEATURE_PB: bool
+    
     # Общие настройки
     REQUEST_TIMEOUT: int
     MAX_RETRIES: int
@@ -87,6 +107,26 @@ def load_settings() -> Settings:
         KAD_API_KEY=getattr(cfg, "KAD_API_KEY"),
         FEATURE_KAD=getattr(cfg, "FEATURE_KAD", False),
         KAD_MAX_CASES=getattr(cfg, "KAD_MAX_CASES", 5),
+        
+        # ГИР БО
+        GIRBO_BASE_URL=getattr(cfg, "GIRBO_BASE_URL", "https://bo.nalog.gov.ru"),
+        GIRBO_TOKEN=getattr(cfg, "GIRBO_TOKEN"),
+        FEATURE_GIRBO=getattr(cfg, "FEATURE_GIRBO", True),
+        
+        # ЕИС
+        ZAKUPKI_MODE=getattr(cfg, "ZAKUPKI_MODE", "soap"),
+        ZAKUPKI_WSDL_URL=getattr(cfg, "ZAKUPKI_WSDL_URL"),
+        ZAKUPKI_DATASET_URL=getattr(cfg, "ZAKUPKI_DATASET_URL"),
+        FEATURE_ZAKUPKI=getattr(cfg, "FEATURE_ZAKUPKI", False),
+        
+        # РАР
+        FSRAR_API_URL=getattr(cfg, "FSRAR_API_URL"),
+        FSRAR_DATASET_URL=getattr(cfg, "FSRAR_DATASET_URL"),
+        FEATURE_FSRAR=getattr(cfg, "FEATURE_FSRAR", False),
+        
+        # Прозрачный бизнес
+        PB_DATASETS=getattr(cfg, "PB_DATASETS", "{}"),
+        FEATURE_PB=getattr(cfg, "FEATURE_PB", True),
         
         # Общие настройки
         REQUEST_TIMEOUT=getattr(cfg, "REQUEST_TIMEOUT", 10),

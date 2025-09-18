@@ -9,7 +9,11 @@ from datetime import datetime
 
 from domain.models import CompanyAggregate, CompanyBase, MsmeInfo, BankruptcyInfo, ArbitrationInfo, FinanceSnapshot, ProcurementStats, License
 from services.providers.datanewton import get_dn_client
-from services.mappers.datanewton import map_company_core_to_base, map_finance_to_snapshots
+from services.mappers.datanewton import (
+    map_company_core_to_base,
+    map_finance_to_snapshots,
+    map_counterparty_to_base,
+)
 from services.providers.msme import check_msme_status
 from services.providers.efrsb import check_bankruptcy_status
 from services.providers.kad import get_arbitration_cases
@@ -111,7 +115,10 @@ class CompanyAggregator:
         return re.match(r'^\d{13}$|^\d{15}$', query) is not None
 
     async def _get_company_base_via_dn(self, query: str) -> Optional[CompanyBase]:
-        """Пытается получить базовую информацию через DataNewton (suggestions/core) с кэшем."""
+        """Получает базовую информацию через DataNewton, с учётом тарифа.
+        - INN/OGRN: сначала /v1/counterparty, затем фолбек /v1/company/core
+        - Name: не поддерживаем на текущем плане — вернём None
+        """
         try:
             cache_key = f"dn_core_{query}"
             cached = await get_cached(cache_key)
@@ -122,56 +129,23 @@ class CompanyAggregator:
             if not client:
                 return None
 
-            inn: Optional[str] = None
-            ogrn: Optional[str] = None
+            # Only INN/OGRN supported here
             if self._is_inn(query):
-                inn = query
+                # Try counterparty first
+                cp = client.get_counterparty(inn=query)
+                base = map_counterparty_to_base(cp or {})
+                if not base:
+                    core = client.get_company_core(query)
+                    base = map_company_core_to_base(core or {})
             elif self._is_ogrn(query):
-                ogrn = query
+                cp = client.get_counterparty(ogrn=query)
+                base = map_counterparty_to_base(cp or {})
+                if not base:
+                    core = client.get_company_core(query)
+                    base = map_company_core_to_base(core or {})
             else:
-                # name search → pick first suggestion
-                try:
-                    s = client.suggestions(query, type="all")
-                    items = (s or {}).get("data") or []
-                    if items:
-                        first = items[0]
-                        inn = first.get("inn")
-                        ogrn = first.get("ogrn")
-                except Exception:
-                    pass
-
-            core = None
-            if inn:
-                core = client.get_company_core(inn)
-            elif ogrn:
-                core = client.get_company_core(ogrn)
-
-            base = map_company_core_to_base(core or {})
-            # Fallback: batchCardsByFilters by name when core is unavailable
-            if not base and not (inn or ogrn):
-                try:
-                    bc = client.get_batch_by_filters(limit=1, offset=0, body={"search_text": query})
-                    items = (bc or {}).get("data") or []
-                    if items:
-                        it = items[0]
-                        base = CompanyBase(
-                            inn=str(it.get("inn") or ""),
-                            ogrn=it.get("ogrn"),
-                            kpp=None,
-                            name_full=it.get("name") or "",
-                            name_short=it.get("name"),
-                            registration_date=None,
-                            liquidation_date=None,
-                            status="UNKNOWN",
-                            okved=it.get("activity_kind_industry_code"),
-                            address=it.get("address"),
-                            address_qc=None,
-                            management_name=it.get("manager_name"),
-                            management_post=it.get("manager_position"),
-                            authorized_capital=str(it.get("charter_capital")) if it.get("charter_capital") else None,
-                        )
-                except Exception as e:
-                    log.warning("DN batchCards fallback failed", query=query, error=str(e))
+                log.info("DN: Name search disabled for current plan; request INN/OGRN", query=query)
+                base = None
             if base:
                 await set_cached(cache_key, base.dict(), ttl_hours=24 * 7)
             return base
@@ -234,31 +208,29 @@ class CompanyAggregator:
             return None
     
     async def _get_arbitration_info(self, inn: str) -> Optional[ArbitrationInfo]:
-        """Получает информацию об арбитраже"""
-        if not self.config.kad_enabled:
-            log.debug("Skipping KAD: feature disabled")
-            return None
-        
+        """Получает информацию об арбитраже через DataNewton"""
         try:
-            cache_key = f"arbitration_{inn}"
+            cache_key = f"dn_arbitration_{inn}"
             cached = await get_cached(cache_key)
             if cached:
                 return ArbitrationInfo(**cached)
-            
-            arbitration_info = await get_arbitration_cases(
-                inn,
-                self.config.kad_api_url,
-                self.config.kad_api_key,
-                self.config.kad_enabled,
-                self.config.kad_max_cases
+
+            client = get_dn_client()
+            if not client:
+                return None
+            data = client.get_arbitration_cases(inn=inn)
+            # DataNewton may return {total_cases, data: [...]} or {count, cases: [...]}
+            items = (data or {}).get("data") or (data or {}).get("cases") or []
+            total = (
+                (data or {}).get("total_cases")
+                or (data or {}).get("count")
+                or len(items)
             )
-            
-            # Кэшируем на 7 дней
-            await set_cached(cache_key, arbitration_info.dict(), ttl_hours=24 * 7)
-            return arbitration_info
-            
+            info = ArbitrationInfo(total=total, cases=items[: self.config.kad_max_cases])
+            await set_cached(cache_key, info.dict(), ttl_hours=24 * 7)
+            return info
         except Exception as e:
-            log.error("Arbitration check failed", inn=inn, error=str(e))
+            log.error("DN arbitration fetch failed", inn=inn, error=str(e))
             return None
     
     async def _get_finances_info(self, inn: str) -> List[FinanceSnapshot]:

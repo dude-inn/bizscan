@@ -33,6 +33,7 @@ log = setup_logging()
 # Endpoint paths (adjust per DataNewton docs)
 PATH_RESOLVE = "/v1/party/resolve"
 PATH_COMPANY = "/v1/company/core"
+PATH_COUNTERPARTY = "/v1/counterparty"
 PATH_FINANCE_COMPANY = "/v1/company/finance"
 PATH_FINANCE = "/v1/finance"  # finance by inn/ogrn as per public docs
 PATH_BATCH_CARDS = "/v1/batchCardsByFilters"
@@ -44,6 +45,7 @@ PATH_DICT_LEASE_CLASSIFIER = "/v1/dictionary/lease-classifier"
 PATH_TAX_INFO = "/v1/taxInfo"
 PATH_PAID_TAXES = "/v1/paidTaxes"
 PATH_PROCURE_SUMMARY = "/v1/company/procurement/summary"
+PATH_ARBITRATION_CASES = "/v1/arbitration-cases"
 PATH_ENFORCEMENT = "/v1/company/enforcement/summary"
 PATH_CERTIFICATES = "/v1/company/certificates"
 PATH_IP_SUMMARY = "/v1/company/ip/summary"
@@ -204,6 +206,18 @@ class DataNewtonClient:
         log.info("DN get_company_core", id=inn_or_ogrn)
         return self._request("GET", PATH_COMPANY, params={"id": inn_or_ogrn})
 
+    def get_counterparty(self, inn: Optional[str] = None, ogrn: Optional[str] = None) -> Dict[str, Any]:
+        """GET /v1/counterparty with inn or ogrn; supports query-key auth."""
+        params: Dict[str, Any] = {}
+        if inn:
+            params["inn"] = inn
+        if ogrn:
+            params["ogrn"] = ogrn
+        if self.cfg.auth_scheme.lower() == "query" and self.cfg.token:
+            params["key"] = self.cfg.token
+        log.info("DN get_counterparty", inn=inn, ogrn=ogrn)
+        return self._request("GET", PATH_COUNTERPARTY, params=params)
+
     def get_finance_company(self, inn_or_ogrn: str) -> List[Dict[str, Any]]:
         """Legacy/company-scoped finance endpoint using id param.
         Kept for backward compatibility if aggregator already expects it.
@@ -326,6 +340,18 @@ class DataNewtonClient:
             params["key"] = self.cfg.token
         log.info("DN get_paid_taxes", inn=inn, ogrn=ogrn)
         return self._request("GET", PATH_PAID_TAXES, params=params)
+
+    def get_arbitration_cases(self, inn: Optional[str] = None, ogrn: Optional[str] = None) -> Dict[str, Any]:
+        """GET /v1/arbitration-cases with inn or ogrn; supports query-key auth."""
+        params: Dict[str, Any] = {}
+        if inn:
+            params["inn"] = inn
+        if ogrn:
+            params["ogrn"] = ogrn
+        if self.cfg.auth_scheme.lower() == "query" and self.cfg.token:
+            params["key"] = self.cfg.token
+        log.info("DN get_arbitration_cases", inn=inn, ogrn=ogrn)
+        return self._request("GET", PATH_ARBITRATION_CASES, params=params)
 
 
 # Convenience helpers used by aggregator

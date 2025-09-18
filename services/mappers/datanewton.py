@@ -37,6 +37,61 @@ def map_company_core_to_base(core: Dict[str, Any]) -> Optional[CompanyBase]:
         return None
 
 
+def map_counterparty_to_base(counterparty: Dict[str, Any]) -> Optional[CompanyBase]:
+    """Map DataNewton counterparty response to CompanyBase.
+    Expected fields: inn, ogrn, kpp, name, short_name, address, okved.
+    """
+    if not counterparty:
+        return None
+    # unwrap common wrappers
+    payload: Any = counterparty
+    try:
+        if isinstance(counterparty, dict) and "data" in counterparty:
+            data_field = counterparty.get("data")
+            if isinstance(data_field, list):
+                payload = data_field[0] if data_field else None
+            elif isinstance(data_field, dict):
+                payload = data_field
+            else:
+                payload = None
+    except Exception:
+        payload = counterparty
+    if not isinstance(payload, dict) or not payload:
+        return None
+    try:
+        inn = payload.get("inn") or payload.get("taxpayer_inn")
+        company_block = payload.get("company") or {}
+        names_block = company_block.get("company_names") or {}
+        # Prefer structured names from company.company_names
+        name_full = (
+            names_block.get("full_name")
+            or payload.get("name_full")
+            or payload.get("name")
+            or payload.get("short_name")
+            or ""
+        )
+        if not inn or not name_full:
+            return None
+        return CompanyBase(
+            inn=str(inn),
+            ogrn=payload.get("ogrn"),
+            kpp=payload.get("kpp"),
+            name_full=name_full,
+            name_short=names_block.get("short_name")
+            or payload.get("short_name")
+            or payload.get("name_short"),
+            okved=(company_block.get("okveds") or [{}])[0].get("code") if company_block.get("okveds") else (payload.get("okved_main") or payload.get("okved")),
+            address=(company_block.get("address") or {}).get("full_address")
+            or payload.get("address")
+            or (payload.get("address_block") or {}).get("full_address"),
+            management_name=(company_block.get("managers") or [{}])[0].get("name") if company_block.get("managers") else ((payload.get("managers_block") or {}).get("manager_name") or payload.get("manager_name")),
+            management_post=(company_block.get("managers") or [{}])[0].get("position") if company_block.get("managers") else ((payload.get("managers_block") or {}).get("manager_position") or payload.get("manager_position")),
+            authorized_capital=(company_block.get("charter_capital") if isinstance(company_block.get("charter_capital"), (int, float, str)) else None) or payload.get("charter_capital"),
+        )
+    except Exception:
+        return None
+
+
 def _to_decimal(value: Any) -> Optional[Decimal]:
     try:
         if value is None:

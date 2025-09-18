@@ -341,9 +341,9 @@ class DataNewtonClient:
         log.info("DN get_paid_taxes", inn=inn, ogrn=ogrn)
         return self._request("GET", PATH_PAID_TAXES, params=params)
 
-    def get_arbitration_cases(self, inn: Optional[str] = None, ogrn: Optional[str] = None) -> Dict[str, Any]:
+    def get_arbitration_cases(self, inn: Optional[str] = None, ogrn: Optional[str] = None, *, limit: int = 1000, offset: int = 0) -> Dict[str, Any]:
         """GET /v1/arbitration-cases with inn or ogrn; supports query-key auth."""
-        params: Dict[str, Any] = {}
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
         if inn:
             params["inn"] = inn
         if ogrn:

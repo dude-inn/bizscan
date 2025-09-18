@@ -62,6 +62,18 @@ def map_counterparty_to_base(counterparty: Dict[str, Any]) -> Optional[CompanyBa
         inn = payload.get("inn") or payload.get("taxpayer_inn")
         company_block = payload.get("company") or {}
         names_block = company_block.get("company_names") or {}
+        status_block = company_block.get("status") or {}
+        active = bool(status_block.get("active_status")) if isinstance(status_block, dict) else None
+        date_end = status_block.get("date_end") if isinstance(status_block, dict) else None
+        status_short_ru = status_block.get("status_rus_short") if isinstance(status_block, dict) else None
+        # Status mapping
+        status_val = "UNKNOWN"
+        if active is True:
+            status_val = "ACTIVE"
+        elif active is False and date_end:
+            status_val = "LIQUIDATED"
+        elif active is False:
+            status_val = "LIQUIDATING"
         # Prefer structured names from company.company_names
         name_full = (
             names_block.get("full_name")
@@ -80,6 +92,9 @@ def map_counterparty_to_base(counterparty: Dict[str, Any]) -> Optional[CompanyBa
             name_short=names_block.get("short_name")
             or payload.get("short_name")
             or payload.get("name_short"),
+            registration_date=company_block.get("registration_date"),
+            liquidation_date=date_end or None,
+            status=status_val,  # ACTIVE/LIQUIDATED/LIQUIDATING/UNKNOWN
             okved=(company_block.get("okveds") or [{}])[0].get("code") if company_block.get("okveds") else (payload.get("okved_main") or payload.get("okved")),
             address=(company_block.get("address") or {}).get("full_address")
             or payload.get("address")

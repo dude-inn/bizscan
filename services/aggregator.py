@@ -147,7 +147,8 @@ class CompanyAggregator:
                 log.info("DN: Name search disabled for current plan; request INN/OGRN", query=query)
                 base = None
             if base:
-                await set_cached(cache_key, base.dict(), ttl_hours=24 * 7)
+                # counterparty/base TTL: 72h
+                await set_cached(cache_key, base.dict(), ttl_hours=72)
             return base
         except Exception as e:
             log.warning("DN core fetch failed", query=query, error=str(e))
@@ -227,7 +228,8 @@ class CompanyAggregator:
                 or len(items)
             )
             info = ArbitrationInfo(total=total, cases=items[: self.config.kad_max_cases])
-            await set_cached(cache_key, info.dict(), ttl_hours=24 * 7)
+            # arbitration TTL: 12h
+            await set_cached(cache_key, info.dict(), ttl_hours=12)
             return info
         except Exception as e:
             log.error("DN arbitration fetch failed", inn=inn, error=str(e))
@@ -248,7 +250,8 @@ class CompanyAggregator:
 
             data = client.get_finance(inn=inn)
             snapshots = map_finance_to_snapshots(data)
-            await set_cached(cache_key, [f.dict() for f in snapshots], ttl_hours=24 * 30)
+            # finance TTL: 168h (7 days)
+            await set_cached(cache_key, [f.dict() for f in snapshots], ttl_hours=168)
             return snapshots
 
         except Exception as e:
@@ -423,7 +426,8 @@ class CompanyAggregator:
                     dn_extras["paid_taxes"] = cached_pt
                 else:
                     dn_extras["paid_taxes"] = client.get_paid_taxes(inn=company_base.inn)
-                    await set_cached(key_pt, dn_extras["paid_taxes"], ttl_hours=24 * 30)
+                    # paidTaxes TTL: 168h (7 days)
+                    await set_cached(key_pt, dn_extras["paid_taxes"], ttl_hours=168)
 
                 key_ps = f"dn_procure_{company_base.inn}"
                 cached_ps = await get_cached(key_ps)

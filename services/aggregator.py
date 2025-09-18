@@ -8,7 +8,8 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 from domain.models import CompanyAggregate, CompanyBase, MsmeInfo, BankruptcyInfo, ArbitrationInfo, FinanceSnapshot, ProcurementStats, License
-from services.providers.dadata import get_company_by_inn, search_company_by_name
+from services.providers.datanewton import get_dn_client
+from services.mappers.datanewton import map_company_core_to_base, map_finance_to_snapshots
 from services.providers.msme import check_msme_status
 from services.providers.efrsb import check_bankruptcy_status
 from services.providers.kad import get_arbitration_cases
@@ -30,6 +31,8 @@ class AggregatorConfig:
         dadata_secret_key: Optional[str] = None,
         msme_data_url: Optional[str] = None,
         msme_local_file: Optional[str] = None,
+        # NEW: msme feature flag
+        msme_enabled: bool = True,
         efrsb_api_url: Optional[str] = None,
         efrsb_api_key: Optional[str] = None,
         efrsb_enabled: bool = False,
@@ -57,6 +60,7 @@ class AggregatorConfig:
         self.dadata_secret_key = dadata_secret_key
         self.msme_data_url = msme_data_url
         self.msme_local_file = msme_local_file
+        self.msme_enabled = msme_enabled
         self.efrsb_api_url = efrsb_api_url
         self.efrsb_api_key = efrsb_api_key
         self.efrsb_enabled = efrsb_enabled
@@ -105,61 +109,83 @@ class CompanyAggregator:
     def _is_ogrn(self, query: str) -> bool:
         """Проверяет, является ли запрос ОГРН"""
         return re.match(r'^\d{13}$|^\d{15}$', query) is not None
-    
-    async def _get_company_by_inn_with_retry(self, inn: str) -> Optional[CompanyBase]:
-        """Получает данные компании по ИНН с повторными попытками"""
-        for attempt in range(self.config.max_retries + 1):
-            try:
-                # Проверяем кэш
-                cache_key = f"company_inn_{inn}"
-                cached = await get_cached(cache_key)
-                if cached:
-                    log.info("Company data found in cache", inn=inn)
-                    return CompanyBase(**cached)
-                
-                # Запрашиваем данные
-                company = await get_company_by_inn(
-                    inn, 
-                    self.config.dadata_api_key, 
-                    self.config.dadata_secret_key
-                )
-                
-                if company:
-                    # Сохраняем в кэш
-                    await set_cached(cache_key, company.dict(), ttl_hours=24)
-                    return company
-                
+
+    async def _get_company_base_via_dn(self, query: str) -> Optional[CompanyBase]:
+        """Пытается получить базовую информацию через DataNewton (suggestions/core) с кэшем."""
+        try:
+            cache_key = f"dn_core_{query}"
+            cached = await get_cached(cache_key)
+            if cached:
+                return CompanyBase(**cached)
+
+            client = get_dn_client()
+            if not client:
                 return None
-                
-            except Exception as e:
-                log.warning("Attempt failed", attempt=attempt + 1, inn=inn, error=str(e))
-                if attempt < self.config.max_retries:
-                    await asyncio.sleep(2 ** attempt)  # Экспоненциальная задержка
-                else:
-                    log.error("All attempts failed", inn=inn, error=str(e))
-                    return None
+
+            inn: Optional[str] = None
+            ogrn: Optional[str] = None
+            if self._is_inn(query):
+                inn = query
+            elif self._is_ogrn(query):
+                ogrn = query
+            else:
+                # name search → pick first suggestion
+                try:
+                    s = client.suggestions(query, type="all")
+                    items = (s or {}).get("data") or []
+                    if items:
+                        first = items[0]
+                        inn = first.get("inn")
+                        ogrn = first.get("ogrn")
+                except Exception:
+                    pass
+
+            core = None
+            if inn:
+                core = client.get_company_core(inn)
+            elif ogrn:
+                core = client.get_company_core(ogrn)
+
+            base = map_company_core_to_base(core or {})
+            # Fallback: batchCardsByFilters by name when core is unavailable
+            if not base and not (inn or ogrn):
+                try:
+                    bc = client.get_batch_by_filters(limit=1, offset=0, body={"search_text": query})
+                    items = (bc or {}).get("data") or []
+                    if items:
+                        it = items[0]
+                        base = CompanyBase(
+                            inn=str(it.get("inn") or ""),
+                            ogrn=it.get("ogrn"),
+                            kpp=None,
+                            name_full=it.get("name") or "",
+                            name_short=it.get("name"),
+                            registration_date=None,
+                            liquidation_date=None,
+                            status="UNKNOWN",
+                            okved=it.get("activity_kind_industry_code"),
+                            address=it.get("address"),
+                            address_qc=None,
+                            management_name=it.get("manager_name"),
+                            management_post=it.get("manager_position"),
+                            authorized_capital=str(it.get("charter_capital")) if it.get("charter_capital") else None,
+                        )
+                except Exception as e:
+                    log.warning("DN batchCards fallback failed", query=query, error=str(e))
+            if base:
+                await set_cached(cache_key, base.dict(), ttl_hours=24 * 7)
+            return base
+        except Exception as e:
+            log.warning("DN core fetch failed", query=query, error=str(e))
+            return None
     
-    async def _search_company_by_name_with_retry(self, name: str) -> List[CompanyBase]:
-        """Поиск компании по названию с повторными попытками"""
-        for attempt in range(self.config.max_retries + 1):
-            try:
-                companies = await search_company_by_name(
-                    name,
-                    self.config.dadata_api_key,
-                    self.config.dadata_secret_key
-                )
-                return companies
-                
-            except Exception as e:
-                log.warning("Search attempt failed", attempt=attempt + 1, name=name, error=str(e))
-                if attempt < self.config.max_retries:
-                    await asyncio.sleep(2 ** attempt)
-                else:
-                    log.error("All search attempts failed", name=name, error=str(e))
-                    return []
+    # DaData fallback removed; all resolution via DataNewton
     
     async def _get_msme_info(self, inn: str) -> Optional[MsmeInfo]:
         """Получает информацию о МСП"""
+        if not getattr(self.config, "msme_enabled", True):
+            log.debug("Skipping MSME: feature disabled")
+            return None
         try:
             cache_key = f"msme_{inn}"
             cached = await get_cached(cache_key)
@@ -183,6 +209,7 @@ class CompanyAggregator:
     async def _get_bankruptcy_info(self, inn: str) -> Optional[BankruptcyInfo]:
         """Получает информацию о банкротстве"""
         if not self.config.efrsb_enabled:
+            log.debug("Skipping EFRSB: feature disabled")
             return None
         
         try:
@@ -209,6 +236,7 @@ class CompanyAggregator:
     async def _get_arbitration_info(self, inn: str) -> Optional[ArbitrationInfo]:
         """Получает информацию об арбитраже"""
         if not self.config.kad_enabled:
+            log.debug("Skipping KAD: feature disabled")
             return None
         
         try:
@@ -234,33 +262,37 @@ class CompanyAggregator:
             return None
     
     async def _get_finances_info(self, inn: str) -> List[FinanceSnapshot]:
-        """Получает финансовые показатели из ГИР БО"""
-        if not self.config.girbo_enabled or not self.config.girbo_base_url:
-            return []
-        
+        """Получает финансовые показатели из DataNewton (замена GIR BO)."""
         try:
-            cache_key = f"finances_{inn}"
+            cache_key = f"dn_finance_{inn}"
             cached = await get_cached(cache_key)
             if cached:
                 return [FinanceSnapshot(**item) for item in cached]
-            
-            finances = await get_company_finances(
-                inn,
-                self.config.girbo_base_url,
-                self.config.girbo_token
-            )
-            
-            # Кэшируем на 30 дней
-            await set_cached(cache_key, [f.dict() for f in finances], ttl_hours=24 * 30)
-            return finances
-            
+
+            client = get_dn_client()
+            if not client:
+                log.debug("DataNewton client not configured")
+                return []
+
+            data = client.get_finance(inn=inn)
+            snapshots = map_finance_to_snapshots(data)
+            await set_cached(cache_key, [f.dict() for f in snapshots], ttl_hours=24 * 30)
+            return snapshots
+
         except Exception as e:
-            log.error("Finances check failed", inn=inn, error=str(e))
+            log.error("DataNewton finance fetch failed", inn=inn, error=str(e))
             return []
     
     async def _get_procurement_info(self, inn: str) -> Optional[ProcurementStats]:
         """Получает статистику по госзакупкам"""
         if not self.config.zakupki_enabled:
+            log.debug("Skipping ZAKUPKI: feature disabled")
+            return None
+        if self.config.zakupki_mode == "soap" and not self.config.zakupki_wsdl_url:
+            log.warning("Skipping ZAKUPKI SOAP: WSDL URL not configured")
+            return None
+        if self.config.zakupki_mode == "dataset" and not self.config.zakupki_dataset_url:
+            log.warning("Skipping ZAKUPKI DATASET: dataset URL not configured")
             return None
         
         try:
@@ -289,6 +321,10 @@ class CompanyAggregator:
     async def _get_licenses_info(self, inn: str) -> List[License]:
         """Получает лицензии РАР"""
         if not self.config.fsrar_enabled:
+            log.debug("Skipping FSRAR: feature disabled")
+            return []
+        if not (self.config.fsrar_api_url or self.config.fsrar_dataset_url):
+            log.warning("Skipping FSRAR: neither API nor dataset URL configured")
             return []
         
         try:
@@ -313,7 +349,11 @@ class CompanyAggregator:
     
     async def _get_open_data_info(self, inn: str) -> Dict[str, Any]:
         """Получает открытые данные о компании"""
-        if not self.config.pb_enabled or not self.config.pb_datasets:
+        if not self.config.pb_enabled:
+            log.debug("Skipping PB OpenData: feature disabled")
+            return {}
+        if not self.config.pb_datasets:
+            log.warning("Skipping PB OpenData: datasets mapping is empty")
             return {}
         
         try:
@@ -342,24 +382,7 @@ class CompanyAggregator:
         company_base = None
         
         try:
-            if self._is_inn(query):
-                log.info("Query identified as INN", query=query)
-                # Прямой поиск по ИНН
-                company_base = await self._get_company_by_inn_with_retry(query)
-            elif self._is_ogrn(query):
-                log.info("Query identified as OGRN", query=query)
-                # Поиск по ОГРН (через DaData suggest)
-                companies = await self._search_company_by_name_with_retry(query)
-                if companies:
-                    company_base = companies[0]  # Берем первое совпадение
-                    log.info("Company found via OGRN search", companies_count=len(companies))
-            else:
-                log.info("Query identified as company name", query=query)
-                # Поиск по названию
-                companies = await self._search_company_by_name_with_retry(query)
-                if companies:
-                    company_base = companies[0]  # Берем первое совпадение
-                    log.info("Company found via name search", companies_count=len(companies))
+            company_base = await self._get_company_base_via_dn(query)
         except Exception as e:
             log.error("Failed to get company base info", query=query, error=str(e))
             return None
@@ -367,6 +390,26 @@ class CompanyAggregator:
         if not company_base:
             log.warning("Company not found", query=query)
             return None
+        
+        # Снимок конфигурации провайдеров
+        log.info(
+            "Providers configuration snapshot",
+            msme_enabled=getattr(self.config, "msme_enabled", True),
+            msme_url=bool(self.config.msme_data_url),
+            girbo_enabled=self.config.girbo_enabled,
+            girbo_base_url=bool(self.config.girbo_base_url),
+            zakupki_enabled=self.config.zakupki_enabled,
+            zakupki_mode=self.config.zakupki_mode,
+            zakupki_wsdl_url=bool(self.config.zakupki_wsdl_url),
+            zakupki_dataset_url=bool(self.config.zakupki_dataset_url),
+            fsrar_enabled=self.config.fsrar_enabled,
+            fsrar_api_url=bool(self.config.fsrar_api_url),
+            fsrar_dataset_url=bool(self.config.fsrar_dataset_url),
+            pb_enabled=self.config.pb_enabled,
+            pb_datasets_count=len(self.config.pb_datasets or {}),
+            efrsb_enabled=self.config.efrsb_enabled,
+            kad_enabled=self.config.kad_enabled,
+        )
         
         # Получаем дополнительную информацию параллельно
         log.info("Fetching additional company data", inn=company_base.inn)
@@ -380,6 +423,54 @@ class CompanyAggregator:
             self._get_open_data_info(company_base.inn)
         ]
         
+        # DataNewton-specific extras (risks, taxation, certificates/procure summary)
+        dn_extras: Dict[str, Any] = {}
+        try:
+            client = get_dn_client()
+            if client:
+                # Fetch in sequence to respect rate limit; cache each
+                key_r = f"dn_risks_{company_base.inn}"
+                cached_r = await get_cached(key_r)
+                if cached_r:
+                    dn_extras["risks"] = cached_r
+                else:
+                    dn_extras["risks"] = client.get_risks(inn=company_base.inn)
+                    await set_cached(key_r, dn_extras["risks"], ttl_hours=24 * 7)
+
+                key_tax = f"dn_taxinfo_{company_base.inn}"
+                cached_tax = await get_cached(key_tax)
+                if cached_tax:
+                    dn_extras["tax_info"] = cached_tax
+                else:
+                    dn_extras["tax_info"] = client.get_tax_info(inn=company_base.inn)
+                    await set_cached(key_tax, dn_extras["tax_info"], ttl_hours=24 * 30)
+
+                key_pt = f"dn_paidtaxes_{company_base.inn}"
+                cached_pt = await get_cached(key_pt)
+                if cached_pt:
+                    dn_extras["paid_taxes"] = cached_pt
+                else:
+                    dn_extras["paid_taxes"] = client.get_paid_taxes(inn=company_base.inn)
+                    await set_cached(key_pt, dn_extras["paid_taxes"], ttl_hours=24 * 30)
+
+                key_ps = f"dn_procure_{company_base.inn}"
+                cached_ps = await get_cached(key_ps)
+                if cached_ps:
+                    dn_extras["procure_summary"] = cached_ps
+                else:
+                    dn_extras["procure_summary"] = client.get_procure_summary(company_base.inn)
+                    await set_cached(key_ps, dn_extras["procure_summary"], ttl_hours=24 * 7)
+
+                key_cert = f"dn_cert_{company_base.inn}"
+                cached_cert = await get_cached(key_cert)
+                if cached_cert:
+                    dn_extras["certificates"] = cached_cert
+                else:
+                    dn_extras["certificates"] = client.get_certificates(company_base.inn)
+                    await set_cached(key_cert, dn_extras["certificates"], ttl_hours=24 * 30)
+        except Exception as e:
+            log.warning("DN extras fetch failed", inn=company_base.inn, error=str(e))
+
         try:
             log.info("Executing parallel data fetching tasks")
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -407,7 +498,7 @@ class CompanyAggregator:
         
         # Формируем источники данных
         sources = {
-            "DaData": "API v4.1",
+            "DataNewton": "API v1",
             "Реестр МСП": "Открытые данные ФНС"
         }
         
@@ -439,7 +530,8 @@ class CompanyAggregator:
                 finances=finances,
                 procurement=procurement,
                 licenses=licenses,
-                sources=sources
+                sources=sources,
+                extra=dn_extras
             )
             log.info("Company profile created successfully", 
                     company_name=company_base.name_full,
@@ -472,6 +564,7 @@ async def fetch_company_profile(
         dadata_secret_key=dadata_secret_key,
         msme_data_url=msme_data_url,
         msme_local_file=msme_local_file,
+        msme_enabled=True if msme_data_url else False,
         efrsb_api_url=efrsb_api_url,
         efrsb_api_key=efrsb_api_key,
         efrsb_enabled=efrsb_enabled,

@@ -104,9 +104,9 @@ def _format_company_response(company: CompanyAggregate) -> str:
     elif company.arbitration:
         response += f"\n\n📄 **Арбитраж**\nНет дел"
     
-    # Финансы (ГИР БО)
+    # Финансы (DataNewton)
     if company.finances:
-        response += f"\n\n📊 **Финансы (ГИР БО)**"
+        response += f"\n\n📊 **Финансы (DataNewton)**"
         for finance in company.finances[-3:]:  # Последние 3 года
             year = finance.period
             revenue = f"{finance.revenue:,.0f}" if finance.revenue else "N/A"
@@ -140,6 +140,71 @@ def _format_company_response(company: CompanyAggregate) -> str:
                 activity = license.activity or "N/A"
                 response += f"\n• {license.number} — {activity}"
     
+    # DataNewton extras
+    extras = getattr(company, "extra", {}) or {}
+
+    # Risks
+    risks = extras.get("risks") or {}
+    flags = risks.get("flags") or []
+    if flags:
+        true_flags = [f for f in flags if f.get("value") is True]
+        if true_flags:
+            response += f"\n\n🚩 **Риски (DataNewton)**\nАктивных признаков: {len(true_flags)}"
+            for f in true_flags[:5]:
+                name = f.get("name", "?")
+                ftype = f.get("type", "?")
+                response += f"\n• {name} ({ftype})"
+
+    # Tax info (fines/debts and offences)
+    tax_info = extras.get("tax_info") or {}
+    fines_debts = (tax_info.get("fines_debts") or [])
+    tax_off = (tax_info.get("tax_offences") or [])
+    if fines_debts or tax_off:
+        response += f"\n\n💼 **Налоги (DataNewton)**"
+        if fines_debts:
+            last_fd = fines_debts[-1]
+            arrears = sum((item.get("total_sum") or 0) for item in (last_fd.get("arrears_sum_infos") or []))
+            response += f"\nЗадолженности/штрафы (посл.): {arrears:,.0f}₽"
+        if tax_off:
+            response += f"\nНарушения: {len(tax_off)}"
+
+    # Paid taxes summary
+    paid = extras.get("paid_taxes") or {}
+    paid_data = paid.get("data") or []
+    if paid_data:
+        last = paid_data[-1]
+        report_date = last.get("report_date", "")
+        total_paid = 0.0
+        for t in (last.get("tax_info_list") or []):
+            try:
+                total_paid += float(str(t.get("taxValue", "0")).replace(" ", ""))
+            except Exception:
+                pass
+        response += f"\n\n💳 **Уплаченные налоги (DataNewton)**\n{report_date}: всего {total_paid:,.0f}₽"
+
+    # Procurement summary (DN)
+    ps = extras.get("procure_summary") or {}
+    if ps:
+        total_cnt = ps.get("total_contracts") or ps.get("count") or ps.get("contracts_count")
+        total_amt = ps.get("total_amount") or ps.get("amount")
+        response += "\n\n🛒 **Закупки (DataNewton)**"
+        if total_cnt is not None:
+            response += f"\nКонтрактов: {total_cnt}"
+        if total_amt is not None:
+            try:
+                response += f"\nСумма: {float(total_amt):,.0f}₽"
+            except Exception:
+                response += f"\nСумма: {total_amt}₽"
+
+    # Certificates (DN)
+    certs = extras.get("certificates") or []
+    if isinstance(certs, dict):
+        cert_list = certs.get("items") or []
+    else:
+        cert_list = certs
+    if cert_list:
+        response += f"\n\n📜 **Сертификаты/декларации (DataNewton)**\nЗаписей: {len(cert_list)}"
+
     # Источники
     sources = []
     for source, version in company.sources.items():

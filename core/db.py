@@ -6,7 +6,8 @@ DDL = '''
 CREATE TABLE IF NOT EXISTS cache (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    ttl_hours INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS search_cache (
     key TEXT PRIMARY KEY,
@@ -31,6 +32,15 @@ async def init_db(path: str):
         log.info("Connecting to database")
         async with aiosqlite.connect(path) as db:
             log.info("Database connection established")
+            # Attempt lightweight migration: add ttl_hours if missing
+            try:
+                await db.execute("ALTER TABLE cache ADD COLUMN ttl_hours INTEGER NOT NULL DEFAULT 24")
+                log.info("Migrated cache table: added ttl_hours column")
+                await db.commit()
+            except Exception:
+                # Either table doesn't exist yet or column already exists
+                pass
+            
             log.info("Executing DDL script")
             await db.executescript(DDL)
             log.info("DDL script executed successfully")

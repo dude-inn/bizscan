@@ -3,7 +3,7 @@
 Доменные модели для агрегации данных о компаниях
 """
 from datetime import date, datetime
-from typing import Literal, Optional, List, Dict
+from typing import Literal, Optional, List, Dict, Any
 from decimal import Decimal
 
 from pydantic import BaseModel, Field
@@ -91,6 +91,7 @@ class CompanyAggregate(BaseModel):
     licenses: List[License] = Field(default_factory=list, description="Лицензии")
     fetched_at: datetime = Field(default_factory=datetime.now, description="Время получения данных")
     sources: Dict[str, str] = Field(default_factory=dict, description="Источники данных")
+    extra: Dict[str, Any] = Field(default_factory=dict, description="Дополнительные разделы (DataNewton)")
 
     class Config:
         json_encoders = {

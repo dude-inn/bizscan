@@ -46,13 +46,22 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 DADATA_API_KEY = os.getenv("DADATA_API_KEY")
 DADATA_SECRET_KEY = os.getenv("DADATA_SECRET_KEY")
 
+# === DataNewton ===
+DATANEWTON_API = os.getenv("DATANEWTON_API", "")
+DATANEWTON_TOKEN = os.getenv("DATANEWTON_TOKEN")
+DATANEWTON_TIMEOUT = _get_int("DATANEWTON_TIMEOUT", 10)
+DATANEWTON_MAX_RETRIES = _get_int("DATANEWTON_MAX_RETRIES", 2)
+DATANEWTON_RATE_LIMIT_QPM = _get_int("DATANEWTON_RATE_LIMIT_QPM", 70)
+DATANEWTON_AUTH_SCHEME = os.getenv("DATANEWTON_AUTH_SCHEME", "Bearer")  # Bearer | X-API-Key
+FEATURE_DATANEWTON = _get_bool("FEATURE_DATANEWTON", True)
+
 # === Реестр МСП ===
 MSME_DATA_URL = os.getenv(
     "MSME_DATA_URL", 
-    "https://ofd.nalog.ru/opendata/7707329152-rsmp/data-20250101-structure-20141120.csv"
+    "https://www.nalog.gov.ru/opendata/7707329152-rsmp/data-latest.csv"
 )
 MSME_LOCAL_FILE = os.getenv("MSME_LOCAL_FILE")  # Путь к локальному файлу МСП
-FEATURE_MSME = _get_bool("FEATURE_MSME", True)
+FEATURE_MSME = _get_bool("FEATURE_MSME", False)
 
 # === ЕФРСБ (банкротство) ===
 EFRSB_API_URL = os.getenv("EFRSB_API_URL", "https://api-assist.com/efrsb")
@@ -68,7 +77,7 @@ KAD_MAX_CASES = _get_int("KAD_MAX_CASES", 5)
 # === ГИР БО (финансы) ===
 GIRBO_BASE_URL = os.getenv("GIRBO_BASE_URL", "https://bo.nalog.gov.ru")
 GIRBO_TOKEN = os.getenv("GIRBO_TOKEN")
-FEATURE_GIRBO = _get_bool("FEATURE_GIRBO", True)
+FEATURE_GIRBO = _get_bool("FEATURE_GIRBO", False)
 
 # === ЕИС (госзакупки) ===
 ZAKUPKI_MODE = os.getenv("ZAKUPKI_MODE", "soap")
@@ -83,7 +92,7 @@ FEATURE_FSRAR = _get_bool("FEATURE_FSRAR", False)
 
 # === Прозрачный бизнес ===
 PB_DATASETS = os.getenv("PB_DATASETS", "{}")
-FEATURE_PB = _get_bool("FEATURE_PB", True)
+FEATURE_PB = _get_bool("FEATURE_PB", False)
 
 # === Общие настройки ===
 REQUEST_TIMEOUT = _get_int("REQUEST_TIMEOUT", 10)

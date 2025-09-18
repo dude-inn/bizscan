@@ -16,7 +16,8 @@ def main_menu_kb() -> InlineKeyboardMarkup:
 def report_menu_kb() -> InlineKeyboardMarkup:
     """Меню поиска"""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔍 Поиск по ИНН/ОГРН/названию", callback_data="search_inn")],
+        [InlineKeyboardButton(text="🔢 Ввести ИНН/ОГРН", callback_data="search_inn")],
+        [InlineKeyboardButton(text="📝 Поиск по названию", callback_data="search_name")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_main")],
     ])
 

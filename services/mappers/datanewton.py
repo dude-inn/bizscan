@@ -56,6 +56,19 @@ def map_status(status_obj: Dict[str, Any]) -> Tuple[str, Optional[str]]:
 
 
 def map_counterparty(raw: Dict[str, Any]) -> CompanyCard:
+    # Разворачиваем data если есть
+    if "data" in raw and isinstance(raw["data"], dict):
+        raw = raw["data"]
+    
+    # Логируем структуру для отладки
+    import logging
+    logger = logging.getLogger("mappers")
+    logger.setLevel(logging.INFO)
+    logger.info(f"Counterparty raw keys: {list(raw.keys())}")
+    if "company" in raw:
+        logger.info(f"Company keys: {list(raw['company'].keys())}")
+    logger.info(f"Full company object: {raw['company']}")
+    
     inn = raw.get("inn") or ""
     ogrn = raw.get("ogrn")
     company = raw.get("company") or {}
@@ -65,26 +78,31 @@ def map_counterparty(raw: Dict[str, Any]) -> CompanyCard:
 
     # address может быть пустым объектом
     addr_obj = company.get("address") or {}
-    addr_val = addr_obj.get("value") or None
+    logger.info(f"Address object: {addr_obj}")
+    addr_val = addr_obj.get("line_address") or addr_obj.get("value") or addr_obj.get("full_address") or addr_obj.get("address") or None
 
     managers = company.get("managers") or []
-    manager_name = managers[0].get("name") if managers else None
-    manager_post = managers[0].get("post") if managers else None
+    logger.info(f"Managers: {managers}")
+    manager_name = managers[0].get("fio") or managers[0].get("name") if managers else None
+    manager_post = managers[0].get("position") or managers[0].get("post") if managers else None
 
     okveds = company.get("okveds") or []
+    logger.info(f"OKVEDs: {okveds}")
     okved = None
     if okveds:
         # пытаемся найти основной, иначе берём первый
         primary = next((o for o in okveds if o.get("is_main") or o.get("main")), None)
-        okved = (primary or okveds[0]).get("name") or (primary or okveds[0]).get("code")
+        okved_obj = primary or okveds[0]
+        okved = okved_obj.get("value") or okved_obj.get("name") or okved_obj.get("code") or okved_obj.get("description")
 
     # Признак МСП может жить в отдельном блоке, но в «облегчённых» данных его может не быть
     is_msme = None
-    msp_block = company.get("msp_block") or {}
+    msp_block = company.get("msp_block") or company.get("msme") or {}
+    logger.info(f"MSP block: {msp_block}")
     if msp_block:
-        is_msme = bool(msp_block.get("msp"))
+        is_msme = bool(msp_block.get("msp") or msp_block.get("is_msme") or msp_block.get("is_msme_entity"))
 
-    return CompanyCard(
+    result = CompanyCard(
         inn=inn,
         ogrn=ogrn,
         kpp=company.get("kpp"),
@@ -99,6 +117,9 @@ def map_counterparty(raw: Dict[str, Any]) -> CompanyCard:
         okved=okved,
         is_msme=is_msme,
     )
+    
+    logger.info(f"Mapped company: address={result.address}, manager={result.manager_name}, okved={result.okved}")
+    return result
 
 
 # =======================
@@ -156,8 +177,20 @@ def _value_by_year_from_node(node: Dict[str, Any], year: int) -> Optional[Decima
 
 
 def map_finance(raw: Dict[str, Any]) -> List[FinanceSnapshot]:
+    # Разворачиваем data если есть
+    if "data" in raw and isinstance(raw["data"], dict):
+        raw = raw["data"]
+    
+    # Логируем структуру для отладки
+    import logging
+    logger = logging.getLogger("mappers")
+    logger.setLevel(logging.INFO)
+    logger.info(f"Finance raw keys: {list(raw.keys())}")
+    
     # Ожидается структура с "balances" и списком "years"
     balances = raw.get("balances") or {}
+    logger.info(f"Balances keys: {list(balances.keys())}")
+    logger.info(f"Full balances object: {balances}")
     years: List[int] = list(balances.get("years") or [])
     if not years:
         return []
@@ -171,8 +204,20 @@ def map_finance(raw: Dict[str, Any]) -> List[FinanceSnapshot]:
     node_1500 = _deep_find_code(balances, "1500")
 
     # Отчёт о финрезах (0710002): 2110 (Выручка), 2400 (Чистая прибыль/убыток)
-    node_2110 = _deep_find_code(balances, "2110")
-    node_2400 = _deep_find_code(balances, "2400")
+    # Ищем в fin_results, а не в balances
+    fin_results = raw.get("fin_results") or {}
+    logger.info(f"Fin results keys: {list(fin_results.keys())}")
+    logger.info(f"Full fin_results object: {fin_results}")
+    
+    node_2110 = _deep_find_code(fin_results, "2110")
+    node_2400 = _deep_find_code(fin_results, "2400")
+    logger.info(f"Found nodes: 2110={node_2110 is not None}, 2400={node_2400 is not None}")
+    
+    # Дополнительные коды для поиска выручки и прибыли
+    if not node_2110:
+        node_2110 = _deep_find_code(fin_results, "2110.0") or _deep_find_code(fin_results, "2110.1")
+    if not node_2400:
+        node_2400 = _deep_find_code(fin_results, "2400.0") or _deep_find_code(fin_results, "2400.1")
 
     snapshots: List[FinanceSnapshot] = []
     for y in last_three:
@@ -203,16 +248,33 @@ class PaidTaxItem:
 
 
 def map_paid_taxes(raw: Dict[str, Any]) -> List[PaidTaxItem]:
-    data = raw.get("data") or []
+    # Логируем полный ответ API для отладки
+    import logging
+    logger = logging.getLogger("mappers")
+    logger.setLevel(logging.INFO)
+    logger.info(f"Paid taxes raw response: {raw}")
+    
+    # Разворачиваем data если есть
+    if "data" in raw and isinstance(raw["data"], list):
+        data = raw["data"]
+    else:
+        data = raw.get("data") or []
+    
+    logger.info(f"Paid taxes data length: {len(data)}")
+    if data:
+        logger.info(f"First tax record: {data[0]}")
     result: List[PaidTaxItem] = []
     for row in data:
         rd = row.get("report_date") or row.get("doc_date")
         lst = []
         for t in row.get("tax_info_list") or []:
-            name = t.get("taxName") or t.get("name") or "Налог"
-            val = t.get("taxValue") or t.get("value")
-            if val is not None:
-                lst.append((name, Decimal(str(val))))
+            name = t.get("taxName") or t.get("name") or t.get("tax_name") or "Налог"
+            val = t.get("taxValue") or t.get("value") or t.get("tax_value") or t.get("amount")
+            if val is not None and val != "":
+                try:
+                    lst.append((name, Decimal(str(val))))
+                except:
+                    pass
         result.append(PaidTaxItem(report_date=rd, items=lst))
     return result
 
@@ -228,6 +290,7 @@ class ArbitrationCase:
     role: Optional[str]
     claim_sum: Optional[Decimal]
     court: Optional[str]
+    instances: Optional[List[str]]
 
 
 @dataclass
@@ -237,8 +300,13 @@ class ArbitrationSummary:
 
 
 def map_arbitration(raw: Dict[str, Any], limit: int = 10) -> ArbitrationSummary:
+    # Разворачиваем data если есть
+    if "data" in raw and isinstance(raw["data"], list):
+        data = raw["data"]
+    else:
+        data = raw.get("data") or []
+    
     total = int(raw.get("total_cases") or 0)
-    data = raw.get("data") or []
     # приводим к нужному виду
     cases: List[ArbitrationCase] = []
     for item in data:
@@ -262,6 +330,7 @@ def map_arbitration(raw: Dict[str, Any], limit: int = 10) -> ArbitrationSummary:
                 role=role,
                 claim_sum=Decimal(str(claim_sum)) if claim_sum is not None else None,
                 court=court,
+                instances=inst,
             )
         )
     # сортировка по дате убыв, выводим не более limit

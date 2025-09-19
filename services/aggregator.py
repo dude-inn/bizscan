@@ -54,7 +54,10 @@ def _fmt_finances(fin_list: list[FinanceSnapshot]) -> str:
         rev = format_amount(f.revenue) if f.revenue is not None else "N/A"
         prof = format_amount(f.net_profit) if f.net_profit is not None else "N/A"
         assets = format_amount(f.assets) if f.assets is not None else "N/A"
-        lines.append(f"{f.period}: выручка {rev}, прибыль {prof}, активы {assets}")
+        equity = format_amount(f.equity) if f.equity is not None else "N/A"
+        liab_long = format_amount(f.liabilities_long) if f.liabilities_long is not None else "N/A"
+        liab_short = format_amount(f.liabilities_short) if f.liabilities_short is not None else "N/A"
+        lines.append(f"{f.period}: выручка {rev}, прибыль {prof}, активы {assets}, капитал {equity}, долг.обяз. {liab_long}, кратк.обяз. {liab_short}")
     return "\n".join(lines)
 
 
@@ -88,7 +91,9 @@ def _fmt_arbitration(ar: ArbitrationSummary) -> str:
         if c.claim_sum is not None:
             parts.append(f"сумма {format_amount(c.claim_sum)}")
         if c.court:
-            parts.append(c.court)
+            parts.append(f"суд {c.court}")
+        if c.instances:
+            parts.append(f"инстанции {', '.join(c.instances)}")
         lines.append(" — ".join(parts))
     return "\n".join(lines)
 

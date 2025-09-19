@@ -24,11 +24,13 @@ class DNServerTemporaryError(Exception):
 
 class DataNewtonClient:
     """
-    Минимальный клиент под текущий тариф:
-      - GET /v1/counterparty
-      - GET /v1/finance
-      - GET /v1/paidTaxes
-      - GET /v1/arbitration-cases
+    Клиент для расширенного тарифа DataNewton:
+      - GET /v1/counterparty - общая информация о контрагенте (с фильтрами)
+      - GET /v1/finance - финансовая отчетность
+      - GET /v1/paidTaxes - уплаченные налоги
+      - GET /v1/arbitration-cases - арбитражные дела
+      - GET /v1/links - связи между организациями
+      - GET /v1/corporateActions - корпоративные действия
     Авторизация: query param ?key=...
     """
 
@@ -91,6 +93,19 @@ class DataNewtonClient:
         if not inn and not ogrn:
             raise DNClientError("counterparty requires inn or ogrn")
         params = {"inn": inn} if inn else {"ogrn": ogrn}
+        
+        # Добавляем фильтры для получения детальной информации
+        filters = [
+            "ADDRESS_BLOCK",
+            "MANAGER_BLOCK", 
+            "OKVED_BLOCK",
+            "OWNER_BLOCK",
+            "ROSSTAT_BLOCK",
+            "CONTACT_BLOCK",
+            "WORKERS_COUNT_BLOCK"
+        ]
+        params["filters"] = ",".join(filters)
+        
         return self._get("/v1/counterparty", params=params)
 
     def get_finance(self, *, inn: Optional[str] = None, ogrn: Optional[str] = None) -> Dict[str, Any]:
@@ -103,6 +118,11 @@ class DataNewtonClient:
         if not inn and not ogrn:
             raise DNClientError("paidTaxes requires inn or ogrn")
         params = {"inn": inn} if inn else {"ogrn": ogrn}
+        # Добавляем дополнительные параметры для получения данных
+        params.update({
+            "limit": 1000,
+            "offset": 0
+        })
         return self._get("/v1/paidTaxes", params=params)
 
     def get_arbitration_cases(
@@ -121,3 +141,43 @@ class DataNewtonClient:
         else:
             params["ogrn"] = ogrn
         return self._get("/v1/arbitration-cases", params=params)
+
+    def get_links(
+        self,
+        *,
+        ogrn: str,
+        level: int = 2,
+    ) -> Dict[str, Any]:
+        """GET /v1/links - связи между организациями"""
+        params = {"ogrn": ogrn, "level": level}
+        return self._get("/v1/links", params=params)
+
+    def get_corporate_actions(
+        self,
+        *,
+        inn: Optional[str] = None,
+        ogrn: Optional[str] = None,
+        limit: int = 1000,
+        offset: int = 0,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        group: Optional[str] = None,
+        type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """GET /v1/corporateActions - корпоративные действия"""
+        if not inn and not ogrn:
+            raise DNClientError("corporateActions requires inn or ogrn")
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        if inn:
+            params["inn"] = inn
+        else:
+            params["ogrn"] = ogrn
+        if date_from:
+            params["date_from"] = date_from
+        if date_to:
+            params["date_to"] = date_to
+        if group:
+            params["group"] = group
+        if type:
+            params["type"] = type
+        return self._get("/v1/corporateActions", params=params)

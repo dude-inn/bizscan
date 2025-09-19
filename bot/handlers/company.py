@@ -13,9 +13,9 @@ from aiogram.types import FSInputFile
 
 from bot.states import SearchState, ReportState
 from bot.keyboards.main import choose_report_kb, report_menu_kb
-from services.aggregator import fetch_company_profile
-from domain.models import CompanyAggregate
+from services.aggregator import fetch_company_report_markdown
 from core.logger import setup_logging
+from services.providers.datanewton import DNClientError, DNServerTemporaryError
 from settings import (
     DADATA_API_KEY, DADATA_SECRET_KEY,
     MSME_DATA_URL, MSME_LOCAL_FILE, FEATURE_MSME,
@@ -26,192 +26,6 @@ from settings import (
 
 router = Router(name="company")
 log = setup_logging()
-
-
-def _format_company_response(company: CompanyAggregate) -> str:
-    """Форматирует ответ с информацией о компании"""
-    base = company.base
-    
-    # Заголовок
-    response = f"🧾 **Реквизиты**\n"
-    response += f"{base.name_full}"
-    if base.name_short and base.name_short != base.name_full:
-        response += f" • {base.name_short}"
-    response += f"\nИНН {base.inn}"
-    if base.ogrn:
-        response += f" • ОГРН {base.ogrn}"
-    if base.kpp:
-        response += f" • КПП {base.kpp}"
-    
-    # Адрес
-    if base.address:
-        qc_info = f" (qc={base.address_qc})" if base.address_qc else ""
-        response += f"\n📍 **Адрес:** {base.address}{qc_info}"
-    
-    # Даты и статус
-    if base.registration_date:
-        response += f"\n📅 **Регистрация:** {base.registration_date.strftime('%Y-%m-%d')}"
-    if base.liquidation_date:
-        response += f" • **Ликвидация:** {base.liquidation_date.strftime('%Y-%m-%d')}"
-    
-    status_emoji = {
-        "ACTIVE": "✅",
-        "LIQUIDATING": "⚠️", 
-        "LIQUIDATED": "❌",
-        "UNKNOWN": "❓"
-    }
-    response += f"\n**Статус:** {status_emoji.get(base.status, '❓')} {base.status}"
-    
-    # ОКВЭД
-    if base.okved:
-        response += f"\n🏷️ **ОКВЭД:** {base.okved}"
-    
-    # Руководитель
-    if base.management_name:
-        post = f" — {base.management_post}" if base.management_post else ""
-        response += f"\n\n🧑‍💼 **Руководитель**\n{base.management_name}{post}"
-    
-    # МСП
-    if company.msme and company.msme.is_msme:
-        category_names = {
-            "micro": "микро",
-            "small": "малое", 
-            "medium": "среднее"
-        }
-        category = category_names.get(company.msme.category, company.msme.category)
-        period = f" (на {company.msme.period})" if company.msme.period else ""
-        response += f"\n\n🧩 **МСП**\nКатегория: {category}{period}"
-    elif company.msme:
-        response += f"\n\n🧩 **МСП**\nНе является субъектом МСП"
-    
-    # Банкротство
-    if company.bankruptcy:
-        if company.bankruptcy.has_bankruptcy_records:
-            response += f"\n\n⚖️ **Банкротство**\nНайдено {len(company.bankruptcy.records)} записей"
-            for i, record in enumerate(company.bankruptcy.records[:3], 1):
-                response += f"\n{i}. {record.get('number', 'N/A')} — {record.get('stage', 'N/A')}"
-        else:
-            response += f"\n\n⚖️ **Банкротство**\nНет записей"
-    
-    # Арбитраж
-    if company.arbitration and company.arbitration.total > 0:
-        response += f"\n\n📄 **Арбитраж** (последние {len(company.arbitration.cases)} из {company.arbitration.total})"
-        for i, case in enumerate(company.arbitration.cases[:3], 1):
-            roles = ", ".join(case.get("roles", []))
-            date_str = case.get("date", "N/A")
-            instance = case.get("instance", "N/A")
-            response += f"\n{i}. {case.get('number', 'N/A')} — {roles}, {date_str} — {instance}"
-    elif company.arbitration:
-        response += f"\n\n📄 **Арбитраж**\nНет дел"
-    
-    # Финансы (DataNewton)
-    if company.finances:
-        response += f"\n\n📊 **Финансы (DataNewton)**"
-        for finance in company.finances[-3:]:  # Последние 3 года
-            year = finance.period
-            revenue = f"{finance.revenue:,.0f}" if finance.revenue else "N/A"
-            profit = f"{finance.net_profit:,.0f}" if finance.net_profit else "N/A"
-            assets = f"{finance.assets:,.0f}" if finance.assets else "N/A"
-            response += f"\n{year}: выручка {revenue}₽, прибыль {profit}₽, активы {assets}₽"
-    
-    # Закупки (ЕИС)
-    if company.procurement:
-        contracts = company.procurement.total_contracts
-        amount = f"{company.procurement.total_amount:,.0f}₽" if company.procurement.total_amount else "N/A"
-        last_date = company.procurement.last_contract_date.strftime('%Y-%m-%d') if company.procurement.last_contract_date else "N/A"
-        response += f"\n\n🛒 **Закупки (ЕИС)**\nКонтрактов: {contracts}, сумма: {amount}, последний: {last_date}"
-    
-    # Лицензии (РАР)
-    if company.licenses:
-        active_licenses = [l for l in company.licenses if l.status == "ACTIVE"]
-        inactive_licenses = [l for l in company.licenses if l.status != "ACTIVE"]
-        
-        response += f"\n\n🥃 **Лицензии (РАР)**"
-        if active_licenses:
-            response += f"\nАктивные ({len(active_licenses)}):"
-            for license in active_licenses[:3]:
-                activity = license.activity or "N/A"
-                valid_to = license.valid_to.strftime('%Y-%m-%d') if license.valid_to else "N/A"
-                response += f"\n• {license.number} — {activity} (до {valid_to})"
-        
-        if inactive_licenses:
-            response += f"\nПрекращенные ({len(inactive_licenses)}):"
-            for license in inactive_licenses[:2]:
-                activity = license.activity or "N/A"
-                response += f"\n• {license.number} — {activity}"
-    
-    # DataNewton extras
-    extras = getattr(company, "extra", {}) or {}
-
-    # Risks
-    risks = extras.get("risks") or {}
-    flags = risks.get("flags") or []
-    if flags:
-        true_flags = [f for f in flags if f.get("value") is True]
-        if true_flags:
-            response += f"\n\n🚩 **Риски (DataNewton)**\nАктивных признаков: {len(true_flags)}"
-            for f in true_flags[:5]:
-                name = f.get("name", "?")
-                ftype = f.get("type", "?")
-                response += f"\n• {name} ({ftype})"
-
-    # Tax info (fines/debts and offences)
-    tax_info = extras.get("tax_info") or {}
-    fines_debts = (tax_info.get("fines_debts") or [])
-    tax_off = (tax_info.get("tax_offences") or [])
-    if fines_debts or tax_off:
-        response += f"\n\n💼 **Налоги (DataNewton)**"
-        if fines_debts:
-            last_fd = fines_debts[-1]
-            arrears = sum((item.get("total_sum") or 0) for item in (last_fd.get("arrears_sum_infos") or []))
-            response += f"\nЗадолженности/штрафы (посл.): {arrears:,.0f}₽"
-        if tax_off:
-            response += f"\nНарушения: {len(tax_off)}"
-
-    # Paid taxes summary
-    paid = extras.get("paid_taxes") or {}
-    paid_data = paid.get("data") or []
-    if paid_data:
-        last = paid_data[-1]
-        report_date = last.get("report_date", "")
-        total_paid = 0.0
-        for t in (last.get("tax_info_list") or []):
-            try:
-                total_paid += float(str(t.get("taxValue", "0")).replace(" ", ""))
-            except Exception:
-                pass
-        response += f"\n\n💳 **Уплаченные налоги (DataNewton)**\n{report_date}: всего {total_paid:,.0f}₽"
-
-    # Procurement summary (DN)
-    ps = extras.get("procure_summary") or {}
-    if ps:
-        total_cnt = ps.get("total_contracts") or ps.get("count") or ps.get("contracts_count")
-        total_amt = ps.get("total_amount") or ps.get("amount")
-        response += "\n\n🛒 **Закупки (DataNewton)**"
-        if total_cnt is not None:
-            response += f"\nКонтрактов: {total_cnt}"
-        if total_amt is not None:
-            try:
-                response += f"\nСумма: {float(total_amt):,.0f}₽"
-            except Exception:
-                response += f"\nСумма: {total_amt}₽"
-
-    # Certificates (DN)
-    certs = extras.get("certificates") or []
-    if isinstance(certs, dict):
-        cert_list = certs.get("items") or []
-    else:
-        cert_list = certs
-    if cert_list:
-        response += f"\n\n📜 **Сертификаты/декларации (DataNewton)**\nЗаписей: {len(cert_list)}"
-
-    # Источники
-    sources = []
-    for source, version in company.sources.items():
-        sources.append(f"{source} ({version})")
-    response += f"\n\n🔗 **Источники:** {', '.join(sources)}"
-    
-    return response
 
 
 @router.callback_query(F.data == "back_results")
@@ -261,64 +75,22 @@ async def free_report(cb: CallbackQuery, state: FSMContext):
             await status_msg.edit_text("❌ Не указан поисковый запрос")
             return
         
-        # Получаем профиль компании
-        log.info("Fetching company profile", query=query, user_id=cb.from_user.id)
-        company = await fetch_company_profile(
-            query=query,
-            dadata_api_key=DADATA_API_KEY,
-            dadata_secret_key=DADATA_SECRET_KEY,
-            msme_data_url=MSME_DATA_URL,
-            msme_local_file=MSME_LOCAL_FILE,
-            efrsb_api_url=EFRSB_API_URL,
-            efrsb_api_key=EFRSB_API_KEY,
-            efrsb_enabled=FEATURE_EFRSB,
-            kad_api_url=KAD_API_URL,
-            kad_api_key=KAD_API_KEY,
-            kad_enabled=FEATURE_KAD,
-            kad_max_cases=KAD_MAX_CASES,
-            request_timeout=REQUEST_TIMEOUT,
-            max_retries=MAX_RETRIES
-        )
+        # Получаем отчёт компании
+        log.info("Fetching company report", query=query, user_id=cb.from_user.id)
+        response = fetch_company_report_markdown(query)
         
-        if not company:
-            log.warning("Company not found", query=query, user_id=cb.from_user.id)
-            await status_msg.edit_text("❌ Компания не найдена")
+        if not response or response.startswith("Укажите корректный"):
+            log.warning("Invalid query or company not found", query=query, user_id=cb.from_user.id)
+            await status_msg.edit_text("❌ Компания не найдена или некорректный ИНН/ОГРН")
             return
         
-        log.info("Company profile fetched successfully", 
-                company_name=company.base.name_full,
-                inn=company.base.inn,
+        log.info("Company report fetched successfully", 
+                query=query,
+                response_length=len(response),
                 user_id=cb.from_user.id)
         
-        # Форматируем ответ
-        log.info("Formatting company response", user_id=cb.from_user.id)
-        response = _format_company_response(company)
-        
-        # Разбиваем на части если слишком длинный
-        log.info("Checking response length", response_length=len(response), user_id=cb.from_user.id)
-        if len(response) > 4096:
-            log.info("Response too long, splitting into parts", user_id=cb.from_user.id)
-            parts = []
-            current = ""
-            for line in response.split('\n'):
-                if len(current + line + '\n') > 4000:
-                    parts.append(current.strip())
-                    current = line + '\n'
-                else:
-                    current += line + '\n'
-            if current.strip():
-                parts.append(current.strip())
-            
-            log.info("Response split into parts", parts_count=len(parts), user_id=cb.from_user.id)
-            # Отправляем части
-            for i, part in enumerate(parts):
-                if i == 0:
-                    await status_msg.edit_text(part, parse_mode="Markdown")
-                else:
-                    await cb.message.answer(part, parse_mode="Markdown")
-        else:
-            log.info("Sending single response", user_id=cb.from_user.id)
-            await status_msg.edit_text(response, parse_mode="Markdown")
+        # Отчет готов, не выводим его в сообщение
+        log.info("Report generated successfully", response_length=len(response), user_id=cb.from_user.id)
         
         # Добавляем кнопку для скачивания JSON
         log.info("Adding keyboard buttons", user_id=cb.from_user.id)
@@ -328,15 +100,24 @@ async def free_report(cb: CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_main")]
         ])
         
-        await cb.message.answer(
-            "✅ Данные получены!",
+        await status_msg.edit_text(
+            "✅ Отчет готов! Нажмите кнопку ниже для скачивания файла.",
             reply_markup=keyboard
         )
         log.info("Free report completed successfully", user_id=cb.from_user.id)
         
-        # Сохраняем данные в состоянии для скачивания JSON
-        await state.update_data(company_data=company.dict(), company_text=response)
+        # Сохраняем данные в состоянии для скачивания TXT
+        await state.update_data(company_text=response)
         
+    except DNClientError as e:
+        if "404" in str(e) or "409" in str(e):
+            await status_msg.edit_text("❌ Контрагент не найден. Проверьте ИНН/ОГРН и попробуйте снова.")
+        elif "403" in str(e):
+            await status_msg.edit_text("❌ Доступ к DataNewton запрещён (403). Проверьте ключ и тариф.")
+        else:
+            await status_msg.edit_text(f"❌ Ошибка DataNewton: {str(e)}")
+    except DNServerTemporaryError as e:
+        await status_msg.edit_text(f"❌ Временная ошибка сервера DataNewton: {str(e)}")
     except Exception as e:
         log.error("Free report failed", 
                  error=str(e), 
@@ -355,13 +136,21 @@ async def download_txt(cb: CallbackQuery, state: FSMContext):
     try:
         data = await state.get_data()
         company_text = data.get("company_text")
-        company_data = data.get("company_data")
         
-        if not company_text or not company_data:
+        if not company_text:
             await cb.message.answer("❌ Данные не найдены. Выполните поиск заново.")
             return
         
-        company_name = company_data.get("base", {}).get("name_short") or company_data.get("base", {}).get("name_full", "company")
+        # Извлекаем название компании из текста отчета
+        lines = company_text.split('\n')
+        company_name = "company"
+        for line in lines:
+            # Ищем строку с названием компании (обычно это первая строка после "🧾 **Реквизиты**")
+            if line and not line.startswith('🧾') and not line.startswith('ИНН') and not line.startswith('📅') and not line.startswith('**Статус**'):
+                if len(line) > 5:  # Игнорируем короткие строки
+                    company_name = line.strip()
+                    break
+        
         safe_name = "".join(ch for ch in company_name if ch.isalnum() or ch in (" ", "_", "-"))[:64]
         filename = f"{safe_name}_report.txt"
         

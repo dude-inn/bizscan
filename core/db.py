@@ -34,11 +34,20 @@ async def init_db(path: str):
             log.info("Database connection established")
             # Attempt lightweight migration: add ttl_hours if missing
             try:
-                await db.execute("ALTER TABLE cache ADD COLUMN ttl_hours INTEGER NOT NULL DEFAULT 24")
-                log.info("Migrated cache table: added ttl_hours column")
-                await db.commit()
-            except Exception:
-                # Either table doesn't exist yet or column already exists
+                cur = await db.execute("PRAGMA table_info(cache)")
+                cols = await cur.fetchall()
+                col_names = {row[1] for row in cols}
+                if "ttl_hours" not in col_names:
+                    await db.execute("ALTER TABLE cache ADD COLUMN ttl_hours INTEGER NOT NULL DEFAULT 24")
+                    log.info("Migrated cache table: added ttl_hours column")
+                    await db.commit()
+            except Exception as e:
+                # Suppress "duplicate column name" error specifically
+                if "duplicate column name" in str(e).lower():
+                    log.info("Column ttl_hours already exists, skipping migration")
+                else:
+                    # ignore other errors; DDL below will create table if absent
+                    log.warning("Migration error (non-critical)", error=str(e))
                 pass
             
             log.info("Executing DDL script")

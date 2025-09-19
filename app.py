@@ -17,6 +17,7 @@ from bot.handlers.start import router as start_router
 from bot.handlers.menu import router as menu_router
 from bot.handlers.search import router as search_router
 from bot.handlers.company import router as company_router
+from bot.handlers.report import router as report_router
 
 
 async def main():
@@ -78,6 +79,7 @@ async def main():
         dp.include_router(menu_router)
         dp.include_router(search_router)
         dp.include_router(company_router)
+        dp.include_router(report_router)
         log.info("All routers included successfully")
     except Exception as e:
         log.error("Failed to include routers", error=str(e))

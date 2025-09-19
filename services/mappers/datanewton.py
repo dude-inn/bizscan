@@ -1,176 +1,272 @@
-# -*- coding: utf-8 -*-
-"""
-Mapping helpers for DataNewton responses to domain models.
-"""
+# services/mappers/datanewton.py
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
+from typing import Any, Dict, List, Optional, Tuple
 
-from domain.models import CompanyBase, FinanceSnapshot
+
+# =======================
+# Card / Company mapping
+# =======================
+
+@dataclass
+class CompanyCard:
+    inn: str
+    ogrn: Optional[str]
+    kpp: Optional[str]
+    name_full: str
+    name_short: Optional[str]
+    registration_date: Optional[str]
+    status_code: str  # ACTIVE | LIQUIDATED | NOT_ACTIVE | UNKNOWN
+    status_text: Optional[str]
+    address: Optional[str]
+    manager_name: Optional[str]
+    manager_post: Optional[str]
+    okved: Optional[str]
+    is_msme: Optional[bool]
 
 
-def map_company_core_to_base(core: Dict[str, Any]) -> Optional[CompanyBase]:
-    """Map DataNewton company core response to CompanyBase.
-    Expects fields like inn, ogrn, name, address, okved, manager, etc.
-    """
-    if not core:
+def _extract(d: Dict[str, Any], path: str, default=None):
+    cur: Any = d
+    for key in path.split("."):
+        if cur is None:
+            return default
+        if isinstance(cur, dict):
+            cur = cur.get(key)
+        else:
+            return default
+    return default if cur is None else cur
+
+
+def map_status(status_obj: Dict[str, Any]) -> Tuple[str, Optional[str]]:
+    # DN: {"active_status": true|false, "date_end": "", "status_rus_short": "Действует", ...}
+    active = bool(status_obj.get("active_status"))
+    status_rus = status_obj.get("status_rus_short") or None
+    date_end = (status_obj.get("date_end") or "").strip()
+
+    if active is True:
+        return "ACTIVE", status_rus or "Действует"
+    if active is False and date_end:
+        return "LIQUIDATED", status_rus or "Прекращено"
+    if active is False:
+        return "NOT_ACTIVE", status_rus or "Не действует"
+    return "UNKNOWN", status_rus
+
+
+def map_counterparty(raw: Dict[str, Any]) -> CompanyCard:
+    inn = raw.get("inn") or ""
+    ogrn = raw.get("ogrn")
+    company = raw.get("company") or {}
+    names = company.get("company_names") or {}
+    status_obj = company.get("status") or {}
+    status_code, status_text = map_status(status_obj)
+
+    # address может быть пустым объектом
+    addr_obj = company.get("address") or {}
+    addr_val = addr_obj.get("value") or None
+
+    managers = company.get("managers") or []
+    manager_name = managers[0].get("name") if managers else None
+    manager_post = managers[0].get("post") if managers else None
+
+    okveds = company.get("okveds") or []
+    okved = None
+    if okveds:
+        # пытаемся найти основной, иначе берём первый
+        primary = next((o for o in okveds if o.get("is_main") or o.get("main")), None)
+        okved = (primary or okveds[0]).get("name") or (primary or okveds[0]).get("code")
+
+    # Признак МСП может жить в отдельном блоке, но в «облегчённых» данных его может не быть
+    is_msme = None
+    msp_block = company.get("msp_block") or {}
+    if msp_block:
+        is_msme = bool(msp_block.get("msp"))
+
+    return CompanyCard(
+        inn=inn,
+        ogrn=ogrn,
+        kpp=company.get("kpp"),
+        name_full=names.get("full_name") or "",
+        name_short=names.get("short_name"),
+        registration_date=company.get("registration_date"),
+        status_code=status_code,
+        status_text=status_text,
+        address=addr_val,
+        manager_name=manager_name,
+        manager_post=manager_post,
+        okved=okved,
+        is_msme=is_msme,
+    )
+
+
+# =======================
+# Finance mapping
+# =======================
+
+@dataclass
+class FinanceSnapshot:
+    period: int  # year
+    revenue: Optional[Decimal]
+    net_profit: Optional[Decimal]
+    assets: Optional[Decimal]
+    equity: Optional[Decimal]
+    liabilities_long: Optional[Decimal]
+    liabilities_short: Optional[Decimal]
+
+
+def _deep_find_code(node: Dict[str, Any], code: str) -> Optional[Dict[str, Any]]:
+    """Рекурсивно ищем узел с заданным кодом (0710001/0710002) в childrenMap/indicators."""
+    if not isinstance(node, dict):
         return None
-    try:
-        inn = core.get("inn") or core.get("taxpayer_inn")
-        name_full = core.get("name_full") or core.get("name") or core.get("short_name") or ""
-        if not inn or not name_full:
-            return None
-        return CompanyBase(
-            inn=str(inn),
-            ogrn=core.get("ogrn"),
-            kpp=core.get("kpp"),
-            name_full=name_full,
-            name_short=core.get("short_name") or core.get("name_short"),
-            okved=core.get("okved_main") or core.get("okved"),
-            address=core.get("address") or (core.get("address_block") or {}).get("full_address"),
-            management_name=(core.get("managers_block") or {}).get("manager_name") or core.get("manager_name"),
-            management_post=(core.get("managers_block") or {}).get("manager_position") or core.get("manager_position"),
-            authorized_capital=core.get("charter_capital"),
-        )
-    except Exception:
+    if node.get("code") == code:
+        return node
+    # childrenMap: dict[str, node]
+    for child in (node.get("childrenMap") or {}).values():
+        found = _deep_find_code(child, code)
+        if found:
+            return found
+    # indicators: list[node]
+    for child in (node.get("indicators") or []) or []:
+        found = _deep_find_code(child, code)
+        if found:
+            return found
+    # обойти все словари внутри
+    for v in node.values():
+        if isinstance(v, dict):
+            found = _deep_find_code(v, code)
+            if found:
+                return found
+        elif isinstance(v, list):
+            for it in v:
+                if isinstance(it, dict):
+                    found = _deep_find_code(it, code)
+                    if found:
+                        return found
+    return None
+
+
+def _value_by_year_from_node(node: Dict[str, Any], year: int) -> Optional[Decimal]:
+    sums = (node.get("sum") or {})
+    if not isinstance(sums, dict):
         return None
+    val = sums.get(str(year))
+    return None if val is None else Decimal(str(val))
 
 
-def map_counterparty_to_base(counterparty: Dict[str, Any]) -> Optional[CompanyBase]:
-    """Map DataNewton counterparty response to CompanyBase.
-    Expected fields: inn, ogrn, kpp, name, short_name, address, okved.
-    """
-    if not counterparty:
-        return None
-    # unwrap common wrappers
-    payload: Any = counterparty
-    try:
-        if isinstance(counterparty, dict) and "data" in counterparty:
-            data_field = counterparty.get("data")
-            if isinstance(data_field, list):
-                payload = data_field[0] if data_field else None
-            elif isinstance(data_field, dict):
-                payload = data_field
-            else:
-                payload = None
-    except Exception:
-        payload = counterparty
-    if not isinstance(payload, dict) or not payload:
-        return None
-    try:
-        inn = payload.get("inn") or payload.get("taxpayer_inn")
-        company_block = payload.get("company") or {}
-        names_block = company_block.get("company_names") or {}
-        status_block = company_block.get("status") or {}
-        active = bool(status_block.get("active_status")) if isinstance(status_block, dict) else None
-        date_end = status_block.get("date_end") if isinstance(status_block, dict) else None
-        status_short_ru = status_block.get("status_rus_short") if isinstance(status_block, dict) else None
-        # Status mapping
-        status_val = "UNKNOWN"
-        if active is True:
-            status_val = "ACTIVE"
-        elif active is False and date_end:
-            status_val = "LIQUIDATED"
-        elif active is False:
-            status_val = "LIQUIDATING"
-        # Prefer structured names from company.company_names
-        name_full = (
-            names_block.get("full_name")
-            or payload.get("name_full")
-            or payload.get("name")
-            or payload.get("short_name")
-            or ""
-        )
-        if not inn or not name_full:
-            return None
-        return CompanyBase(
-            inn=str(inn),
-            ogrn=payload.get("ogrn"),
-            kpp=payload.get("kpp"),
-            name_full=name_full,
-            name_short=names_block.get("short_name")
-            or payload.get("short_name")
-            or payload.get("name_short"),
-            registration_date=company_block.get("registration_date"),
-            liquidation_date=date_end or None,
-            status=status_val,  # ACTIVE/LIQUIDATED/LIQUIDATING/UNKNOWN
-            okved=(company_block.get("okveds") or [{}])[0].get("code") if company_block.get("okveds") else (payload.get("okved_main") or payload.get("okved")),
-            address=(company_block.get("address") or {}).get("full_address")
-            or payload.get("address")
-            or (payload.get("address_block") or {}).get("full_address"),
-            management_name=(company_block.get("managers") or [{}])[0].get("name") if company_block.get("managers") else ((payload.get("managers_block") or {}).get("manager_name") or payload.get("manager_name")),
-            management_post=(company_block.get("managers") or [{}])[0].get("position") if company_block.get("managers") else ((payload.get("managers_block") or {}).get("manager_position") or payload.get("manager_position")),
-            authorized_capital=(company_block.get("charter_capital") if isinstance(company_block.get("charter_capital"), (int, float, str)) else None) or payload.get("charter_capital"),
-        )
-    except Exception:
-        return None
-
-
-def _to_decimal(value: Any) -> Optional[Decimal]:
-    try:
-        if value is None:
-            return None
-        return Decimal(str(value))
-    except Exception:
-        return None
-
-
-def map_finance_to_snapshots(finance: Dict[str, Any]) -> List[FinanceSnapshot]:
-    """Map DataNewton finance tree into a flat list of FinanceSnapshot by years.
-    Uses balances/fin_results totals when available to derive high-level metrics.
-    """
-    if not finance:
+def map_finance(raw: Dict[str, Any]) -> List[FinanceSnapshot]:
+    # Ожидается структура с "balances" и списком "years"
+    balances = raw.get("balances") or {}
+    years: List[int] = list(balances.get("years") or [])
+    if not years:
         return []
+    last_three = sorted(years)[-3:]
 
-    years = []
-    try:
-        years = (finance.get("balances") or {}).get("years") or []
-    except Exception:
-        years = []
+    # коды:
+    # Баланс (0710001): 1600 (Итого активов), 1300 (Капитал), 1400 (Долгоср. обяз.), 1500 (Краткоср. обяз.)
+    node_1600 = _deep_find_code(balances, "1600")
+    node_1300 = _deep_find_code(balances, "1300")
+    node_1400 = _deep_find_code(balances, "1400")
+    node_1500 = _deep_find_code(balances, "1500")
+
+    # Отчёт о финрезах (0710002): 2110 (Выручка), 2400 (Чистая прибыль/убыток)
+    node_2110 = _deep_find_code(balances, "2110")
+    node_2400 = _deep_find_code(balances, "2400")
 
     snapshots: List[FinanceSnapshot] = []
-
-    # Try to resolve summary values for each year
-    balances = finance.get("balances") or {}
-    liabilities = (balances.get("liabilities") or {})
-    assets = (balances.get("assets") or {})
-    fin_results = finance.get("fin_results") or {}
-
-    assets_sum = (balances.get("sum") or {})
-    liabilities_sum = (liabilities.get("sum") or {})
-
-    # Net profit may be in fin_results under indicators; try common codes
-    fin_indicators = (fin_results.get("indicators") or [])
-    net_profit_by_year: Dict[str, Any] = {}
-    for ind in fin_indicators:
-        code = ind.get("code")
-        if code in ("2400", "2400/ЧП", "ЧП") or (ind.get("name") or "").lower().startswith("чистая прибыль"):
-            sums = ind.get("sum") or {}
-            net_profit_by_year.update(sums)
-
-    revenue_by_year: Dict[str, Any] = {}
-    for ind in fin_indicators:
-        code = ind.get("code")
-        if code in ("2110", "Выручка") or (ind.get("name") or "").lower().startswith("выручка"):
-            sums = ind.get("sum") or {}
-            revenue_by_year.update(sums)
-
-    for y in years:
-        y_str = str(y)
+    for y in last_three:
         snapshots.append(
             FinanceSnapshot(
-                period=y_str,
-                revenue=_to_decimal(revenue_by_year.get(y_str)),
-                net_profit=_to_decimal(net_profit_by_year.get(y_str)),
-                assets=_to_decimal((assets_sum or {}).get(y_str)),
-                equity=None,
-                liabilities_short=None,
-                liabilities_long=None,
-                source="DataNewton",
+                period=y,
+                revenue=_value_by_year_from_node(node_2110, y) if node_2110 else None,
+                net_profit=_value_by_year_from_node(node_2400, y) if node_2400 else None,
+                assets=_value_by_year_from_node(node_1600, y) if node_1600 else None,
+                equity=_value_by_year_from_node(node_1300, y) if node_1300 else None,
+                liabilities_long=_value_by_year_from_node(node_1400, y) if node_1400 else None,
+                liabilities_short=_value_by_year_from_node(node_1500, y) if node_1500 else None,
             )
         )
-
+    # сортировка по убыванию года для красивого вывода
+    snapshots.sort(key=lambda s: s.period, reverse=False)
     return snapshots
 
+
+# =======================
+# Paid taxes mapping
+# =======================
+
+@dataclass
+class PaidTaxItem:
+    report_date: Optional[str]
+    items: List[Tuple[str, Decimal]]  # (taxName, taxValue)
+
+
+def map_paid_taxes(raw: Dict[str, Any]) -> List[PaidTaxItem]:
+    data = raw.get("data") or []
+    result: List[PaidTaxItem] = []
+    for row in data:
+        rd = row.get("report_date") or row.get("doc_date")
+        lst = []
+        for t in row.get("tax_info_list") or []:
+            name = t.get("taxName") or t.get("name") or "Налог"
+            val = t.get("taxValue") or t.get("value")
+            if val is not None:
+                lst.append((name, Decimal(str(val))))
+        result.append(PaidTaxItem(report_date=rd, items=lst))
+    return result
+
+
+# =======================
+# Arbitration mapping
+# =======================
+
+@dataclass
+class ArbitrationCase:
+    number: str
+    date_start: Optional[str]
+    role: Optional[str]
+    claim_sum: Optional[Decimal]
+    court: Optional[str]
+
+
+@dataclass
+class ArbitrationSummary:
+    total: int
+    cases: List[ArbitrationCase]
+
+
+def map_arbitration(raw: Dict[str, Any], limit: int = 10) -> ArbitrationSummary:
+    total = int(raw.get("total_cases") or 0)
+    data = raw.get("data") or []
+    # приводим к нужному виду
+    cases: List[ArbitrationCase] = []
+    for item in data:
+        number = item.get("first_number") or ""
+        dstart = item.get("date_start")
+        # роль компании — из respondents/plaintiffs
+        role = None
+        if item.get("respondents"):
+            role = (item["respondents"][0].get("role")) or "Ответчик"
+        elif item.get("plaintiffs"):
+            role = (item["plaintiffs"][0].get("role")) or "Истец"
+        claim_sum = item.get("sum")
+        court = None
+        inst = item.get("instances") or []
+        if inst:
+            court = inst[0]
+        cases.append(
+            ArbitrationCase(
+                number=number,
+                date_start=dstart,
+                role=role,
+                claim_sum=Decimal(str(claim_sum)) if claim_sum is not None else None,
+                court=court,
+            )
+        )
+    # сортировка по дате убыв, выводим не более limit
+    def _key(c: ArbitrationCase):
+        return c.date_start or ""
+    cases.sort(key=_key, reverse=True)
+    return ArbitrationSummary(total=total, cases=cases[:limit])
 

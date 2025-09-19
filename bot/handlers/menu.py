@@ -7,6 +7,7 @@ from bot.states import MenuState
 
 router = Router(name="menu")
 
+
 @router.callback_query(F.data == "back_main")
 async def back_main(cb: CallbackQuery, state: FSMContext):
     """Возврат в главное меню из любого места"""
@@ -17,6 +18,7 @@ async def back_main(cb: CallbackQuery, state: FSMContext):
     await state.set_state(MenuState.MAIN)
     await cb.answer()
 
+
 @router.callback_query(F.data == "menu_report")
 async def menu_report(cb: CallbackQuery, state: FSMContext):
     try:
@@ -25,6 +27,7 @@ async def menu_report(cb: CallbackQuery, state: FSMContext):
         await cb.message.answer("Выберите способ поиска:", reply_markup=report_menu_kb())
     await cb.answer()
     await state.set_state(MenuState.REPORT_MENU)
+
 
 @router.callback_query(F.data == "menu_info")
 async def menu_info(cb: CallbackQuery):

@@ -10,8 +10,7 @@ from aiogram.fsm.context import FSMContext
 from bot.keyboards.main import main_menu_kb, report_menu_kb, results_kb, choose_report_kb
 from bot.states import SearchState, MenuState
 from core.logger import setup_logging
-from services.providers.datanewton import get_dn_client
-from services.mappers.datanewton import map_company_core_to_base
+# Name-based search and DN suggestions are disabled by plan
 
 router = Router(name="search")
 log = setup_logging()
@@ -36,13 +35,10 @@ def _is_ogrn(query: str) -> bool:
 
 @router.callback_query(F.data == "search_inn")
 async def ask_inn(cb: CallbackQuery, state: FSMContext):
-    """Запрос ИНН/ОГРН/названия для поиска"""
+    """Запрос ИНН/ОГРН для поиска"""
     await cb.message.edit_text(
         "🔍 **Поиск компании**\n\n"
-        "Введите:\n"
-        "• ИНН (10 или 12 цифр)\n"
-        "• ОГРН (13 или 15 цифр)\n"
-        "• Название компании",
+        "Введите ИНН (10 или 12 цифр) или ОГРН (13 или 15 цифр)",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_main")]
         ])
@@ -93,8 +89,8 @@ async def got_query(msg: Message, state: FSMContext):
     """Обработка поискового запроса"""
     query = _normalize_query(msg.text or "")
     
-    if len(query) < 2:
-        await msg.answer("❌ Слишком короткий запрос. Повторите.")
+    if len(query) < 10:
+        await msg.answer("❌ Введите ИНН (10/12) или ОГРН (13/15) цифрами.")
         return
     
     # Если это ИНН/ОГРН — сразу сохраняем и предлагаем отчёт
@@ -106,42 +102,15 @@ async def got_query(msg: Message, state: FSMContext):
         )
         await state.set_state(SearchState.SELECT)
         return
-
-    # Иначе — это название: запросим подсказки DaData и покажем список
-    await msg.answer(f"🔍 Ищу по названию: {query}")
-    companies = []
-    try:
-        client = get_dn_client()
-        if client:
-            s = client.suggestions(query, type="all")
-            items = (s or {}).get("data") or []
-            for it in items[:10]:
-                core = client.get_company_core(it.get("inn") or it.get("ogrn") or "")
-                base = map_company_core_to_base(core or {})
-                if base:
-                    companies.append(base)
-    except Exception as e:
-        log.error("DN name search failed", query=query, error=str(e))
-        # Fallback to resolve_party if available
-        try:
-            client = client or get_dn_client()
-            if client:
-                r = client.resolve_party(query)
-                items = (r or {}).get("data") or []
-                for it in items[:10]:
-                    core = client.get_company_core(it.get("inn") or it.get("ogrn") or "")
-                    base = map_company_core_to_base(core or {})
-                    if base:
-                        companies.append(base)
-        except Exception as e2:
-            log.error("DN resolve fallback failed", query=query, error=str(e2))
-    await _show_company_choices(msg, companies, state)
+    # Поиск по названию отключён
+    await msg.answer("❌ Поиск по названию недоступен. Введите ИНН или ОГРН.")
+    return
 
 
 @router.callback_query(F.data == "back_search")
 async def back_to_search(cb: CallbackQuery, state: FSMContext):
     await cb.message.edit_text(
-        "🔍 **Поиск компании**\n\nВведите ИНН/ОГРН/название:",
+        "🔍 **Поиск компании**\n\nВведите ИНН или ОГРН:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_main")]
         ])
@@ -162,50 +131,7 @@ async def select_company(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 
-@router.callback_query(F.data == "search_name")
-async def ask_name(cb: CallbackQuery, state: FSMContext):
-    """Альтернативный способ поиска по названию"""
-    await cb.message.edit_text("Введите название компании:")
-    await state.set_state(SearchState.ASK_NAME)
-    await cb.answer()
-
-
-@router.message(SearchState.ASK_NAME)
-async def got_name(msg: Message, state: FSMContext):
-    """Обработка поиска по названию"""
-    query = _normalize_query(msg.text or "")
-    
-    if len(query) < 2:
-        await msg.answer("❌ Слишком короткий запрос. Повторите.")
-        return
-    
-    await msg.answer(f"🔍 Ищу: {query}")
-    companies = []
-    try:
-        client = get_dn_client()
-        if client:
-            s = client.suggestions(query, type="all")
-            items = (s or {}).get("data") or []
-            for it in items[:10]:
-                core = client.get_company_core(it.get("inn") or it.get("ogrn") or "")
-                base = map_company_core_to_base(core or {})
-                if base:
-                    companies.append(base)
-    except Exception as e:
-        log.error("DN name search failed", query=query, error=str(e))
-        try:
-            client = client or get_dn_client()
-            if client:
-                r = client.resolve_party(query)
-                items = (r or {}).get("data") or []
-                for it in items[:10]:
-                    core = client.get_company_core(it.get("inn") or it.get("ogrn") or "")
-                    base = map_company_core_to_base(core or {})
-                    if base:
-                        companies.append(base)
-        except Exception as e2:
-            log.error("DN resolve fallback failed", query=query, error=str(e2))
-    await _show_company_choices(msg, companies, state)
+# Удалены обработчики поиска по названию
 
 
 async def show_page(msg_or_cbmsg, state: FSMContext):

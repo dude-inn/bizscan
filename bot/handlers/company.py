@@ -107,42 +107,7 @@ async def free_report(cb: CallbackQuery, state: FSMContext):
         # Сохраняем данные в состоянии для скачивания TXT
         await state.update_data(company_text=response)
 
-        # Дополнительно: сгенерировать блок для Gamma с официальными ссылками и отправить отдельным сообщением
-        try:
-            profile = await fetch_company_profile(query)
-            base = profile.get("base")
-            if base:
-                company_dict = {
-                    "name_full": getattr(base, "name_full", None),
-                    "name": getattr(base, "name_short", None),
-                    "inn": getattr(base, "inn", None),
-                    "ogrn": getattr(base, "ogrn", None),
-                    "okved": getattr(base, "okved", None),
-                    "opf": None,
-                    "status_code": getattr(base, "status_code", None),
-                    "status_text": getattr(base, "status_text", None),
-                    "registration_date": getattr(base, "registration_date", None),
-                    "address": getattr(base, "address", None),
-                    "manager_name": getattr(base, "manager_name", None),
-                    "manager_post": getattr(base, "manager_post", None),
-                    "charter_capital": None,
-                    "owners": [],
-                    "tax_mode": None,
-                    "workers_count": None,
-                    "contacts": {},
-                    "predecessors": [],
-                    "successors": [],
-                    "negative_lists": [],
-                    "finances_digest": {},
-                }
-                official_links = build_official_links(company_dict.get("inn"), company_dict.get("ogrn"), None)
-                gamma_md = generate_gamma_section(company_dict, official_links)
-                await cb.message.answer(
-                    "🌐 Дополнительно (для Gamma)\n\n" + gamma_md,
-                    disable_web_page_preview=False,
-                )
-        except Exception as e:
-            log.warning("Gamma block generation failed", error=str(e), user_id=cb.from_user.id)
+        # Вывод Gamma-блока отключён по требованиям UX
         
     except (OFDataClientError) as e:
         if "404" in str(e) or "409" in str(e):
@@ -189,7 +154,9 @@ async def download_txt(cb: CallbackQuery, state: FSMContext):
                     break
         
         safe_name = "".join(ch for ch in company_name if ch.isalnum() or ch in (" ", "_", "-"))[:64]
-        filename = f"{safe_name}_report.txt"
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        filename = f"{safe_name}_{today}.txt"
         
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as tmp:
             tmp.write(company_text)

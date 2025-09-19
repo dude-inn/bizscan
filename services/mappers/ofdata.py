@@ -26,6 +26,15 @@ class CompanyCard:
     manager_post: Optional[str]
     okved: Optional[str]
     is_msme: Optional[bool]
+    opf: Optional[str] = None
+    charter_capital: Optional[Decimal] = None
+    owners: Optional[List[Dict[str, Any]]] = None
+    tax_mode: Optional[str] = None
+    workers_count: Optional[int] = None
+    contacts: Optional[Dict[str, Any]] = None
+    predecessors: Optional[List[Dict[str, Any]]] = None
+    successors: Optional[List[Dict[str, Any]]] = None
+    negative_lists: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -79,9 +88,9 @@ def map_status_ofdata(status_obj: Dict[str, Any] | str) -> Tuple[str, Optional[s
     else:
         return "UNKNOWN", None
 
-    if "действующ" in status_name or "active" in status_name:
+    if "действующ" in status_name or "active" in status_name or (isinstance(status_obj, dict) and status_obj.get("active_status") in (True, 1, "1", "true")):
         return "ACTIVE", status_text or "Действует"
-    if "ликвидирован" in status_name or "liquidat" in status_name:
+    if "ликвидирован" in status_name or "liquidat" in status_name or (isinstance(status_obj, dict) and (status_obj.get("date_end") or "")):
         return "LIQUIDATED", status_text or "Ликвидировано"
     if "не действует" in status_name or "исключен" in status_name or "inactive" in status_name:
         return "NOT_ACTIVE", status_text or "Не действует"
@@ -137,7 +146,16 @@ def map_company_ofdata(raw: Dict[str, Any]) -> CompanyCard:
     # Address
     addr = container.get("ЮрАдрес") or container.get("address") or {}
     if isinstance(addr, dict):
-        address = addr.get("АдресРФ") or addr.get("full_address") or addr.get("address")
+        address = (
+            addr.get("value")
+            or addr.get("АдресРФ")
+            or addr.get("full_address")
+            or addr.get("address")
+        )
+        if not address:
+            parts = [addr.get(k) for k in ("region", "area", "city", "street", "house", "building")]
+            parts = [p for p in parts if p]
+            address = ", ".join(parts) if parts else None
     else:
         address = None
 
@@ -150,18 +168,82 @@ def map_company_ofdata(raw: Dict[str, Any]) -> CompanyCard:
         manager_name = m0.get("ФИО") or m0.get("ФИОПолн") or m0.get("fio") or m0.get("name") or m0.get("full_name")
         manager_post = m0.get("НаимДолжн") or m0.get("position")
 
-    # OKVED
-    okved_obj = container.get("ОКВЭД") or container.get("okved") or {}
-    if isinstance(okved_obj, dict):
-        okved = okved_obj.get("Наим") or okved_obj.get("name") or okved_obj.get("description") or okved_obj.get("Код") or okved_obj.get("code")
+    # OKVED: OFData may return list okveds
+    okved = None
+    okveds_list = container.get("okveds") or container.get("ОКВЭДДоп")
+    if isinstance(okveds_list, list) and okveds_list:
+        main = next((x for x in okveds_list if isinstance(x, dict) and x.get("is_main")), okveds_list[0])
+        if isinstance(main, dict):
+            code = main.get("code") or main.get("Код")
+            name = main.get("name") or main.get("Наим")
+            okved = f"{code} {name}".strip() if (code or name) else None
     else:
-        okved = None
+        okved_obj = container.get("ОКВЭД") or container.get("okved") or {}
+        if isinstance(okved_obj, dict):
+            code = okved_obj.get("Код") or okved_obj.get("code")
+            name = okved_obj.get("Наим") or okved_obj.get("name") or okved_obj.get("description")
+            okved = f"{code} {name}".strip() if (code or name) else None
 
     # MSME
     msme_obj = container.get("РМСП") or container.get("msme") or {}
     is_msme = None
     if isinstance(msme_obj, dict):
         is_msme = msme_obj.get("Кат") is not None
+
+    # OPF
+    opf_obj = container.get("ОКОПФ") or container.get("opf") or {}
+    opf_name = None
+    if isinstance(opf_obj, dict):
+        opf_name = opf_obj.get("Наим") or opf_obj.get("name")
+
+    # Charter capital
+    cap_obj = container.get("УстКап") or container.get("charter_capital") or {}
+    cap_amount: Optional[Decimal] = None
+    if isinstance(cap_obj, dict):
+        cap_val = cap_obj.get("Сумма") or cap_obj.get("amount")
+        try:
+            cap_amount = Decimal(str(cap_val)) if cap_val is not None else None
+        except Exception:
+            cap_amount = None
+
+    # Owners (best-effort)
+    owners = container.get("owners") or []
+    if not owners:
+        uchr = container.get("Учред")
+        if isinstance(uchr, dict):
+            owners = uchr.get("ФЛ") or uchr.get("РосОрг") or uchr.get("ИнОрг") or []
+
+    # Tax mode (special regimes)
+    tax_mode = None
+    nalogi = container.get("Налоги") or container.get("taxes") or {}
+    if isinstance(nalogi, dict):
+        modes = nalogi.get("ОсобРежим") or nalogi.get("special_modes")
+        if isinstance(modes, list) and modes:
+            tax_mode = ", ".join(map(str, modes))
+
+    # Workers count
+    workers_count = container.get("СЧР") or container.get("workers_count")
+    try:
+        workers_count = int(workers_count) if workers_count is not None else None
+    except Exception:
+        workers_count = None
+
+    # Contacts
+    contacts = container.get("Контакты") or container.get("contacts") or {}
+
+    # Predecessors/successors
+    predecessors = container.get("Правопредш") or container.get("predecessors") or []
+    successors = container.get("Правопреем") or container.get("successors") or []
+
+    # Negative lists flags
+    negative_lists = {
+        "НедобПост": container.get("НедобПост") or container.get("is_blacklisted_supplier"),
+        "ДисквЛица": container.get("ДисквЛица"),
+        "МассРуковод": container.get("МассРуковод"),
+        "МассУчред": container.get("МассУчред"),
+        "НелегалФин": container.get("НелегалФин"),
+        "Санкции": container.get("Санкции"),
+    }
 
     log.info(
         f"📊 Mapped company: {name_full[:50]}... | INN: {inn} | Status: {status_code} | "
@@ -182,6 +264,15 @@ def map_company_ofdata(raw: Dict[str, Any]) -> CompanyCard:
         manager_post=manager_post,
         okved=okved,
         is_msme=is_msme,
+        opf=opf_name,
+        charter_capital=cap_amount,
+        owners=owners if isinstance(owners, list) else [],
+        tax_mode=tax_mode,
+        workers_count=workers_count,
+        contacts=contacts if isinstance(contacts, dict) else {},
+        predecessors=predecessors if isinstance(predecessors, list) else [],
+        successors=successors if isinstance(successors, list) else [],
+        negative_lists=negative_lists,
     )
 
 

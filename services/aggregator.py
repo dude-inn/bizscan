@@ -163,6 +163,9 @@ def _fmt_finances(fin_list: list[FinanceSnapshot]) -> str:
     lines = []
     # упорядочим по году возрастанию
     fin_list = sorted(fin_list, key=lambda x: x.period)
+    # показываем только последние 5 периодов
+    if len(fin_list) > 5:
+        fin_list = fin_list[-5:]
     for f in fin_list:
         rev = format_amount(f.revenue) if f.revenue is not None else "N/A"
         prof = format_amount(f.net_profit) if f.net_profit is not None else "N/A"
@@ -172,6 +175,45 @@ def _fmt_finances(fin_list: list[FinanceSnapshot]) -> str:
         liab_short = format_amount(f.liabilities_short) if f.liabilities_short is not None else "N/A"
         lines.append(f"{f.period}: выручка {rev}, прибыль {prof}, активы {assets}, капитал {equity}, долг.обяз. {liab_long}, кратк.обяз. {liab_short}")
     return "\n".join(lines)
+
+
+def _fmt_contacts(card: CompanyCard) -> str:
+    contacts = getattr(card, "contacts", {}) or {}
+    if not isinstance(contacts, dict):
+        return "—"
+    site = contacts.get("site") or contacts.get("website")
+    emails = contacts.get("emails") or contacts.get("email") or []
+    phones = contacts.get("phones") or contacts.get("tel") or []
+    if isinstance(emails, str):
+        emails = [emails]
+    if isinstance(phones, str):
+        phones = [phones]
+    # normalize possible dict items to strings
+    def _to_str_list(items):
+        out = []
+        for it in items or []:
+            if isinstance(it, dict):
+                val = it.get("value") or it.get("email") or it.get("phone") or it.get("number") or it.get("display")
+                if val:
+                    out.append(str(val))
+            else:
+                out.append(str(it))
+        return out
+    emails = _to_str_list(emails)
+    phones = _to_str_list(phones)
+    parts = []
+    if site:
+        if isinstance(site, dict):
+            site_val = site.get("value") or site.get("url") or site.get("site")
+            if site_val:
+                parts.append(str(site_val))
+        else:
+            parts.append(str(site))
+    if emails:
+        parts.append("email: " + ", ".join(emails[:3]))
+    if phones:
+        parts.append("тел: " + ", ".join(phones[:3]))
+    return "; ".join(parts) if parts else "—"
 
 
 def _fmt_paid_taxes(items) -> str:
@@ -195,7 +237,7 @@ def _fmt_arbitration(ar: ArbitrationSummary) -> str:
     if ar.total == 0 or not ar.cases:
         return "Нет дел"
     lines = [f"Всего дел: {ar.total}"]
-    for c in ar.cases:
+    for c in ar.cases[:10]:
         parts = [c.number]
         if c.date_start:
             parts.append(c.date_start)
@@ -203,13 +245,14 @@ def _fmt_arbitration(ar: ArbitrationSummary) -> str:
             parts.append(c.role)
         if getattr(c, "amount", None) is not None:
             parts.append(f"сумма {format_amount(c.amount)}")
-        if c.court:
-            parts.append(f"суд {c.court}")
-        if c.instances:
-            if isinstance(c.instances, (list, tuple)):
-                parts.append(f"инстанции {', '.join(c.instances)}")
-            else:
-                parts.append(f"инстанции {c.instances}")
+        # court: prefer first instance if list provided
+        court_name = None
+        if c.instances and isinstance(c.instances, (list, tuple)) and len(c.instances) > 0:
+            court_name = c.instances[0]
+        elif c.court:
+            court_name = c.court
+        if court_name:
+            parts.append(court_name)
         lines.append(" — ".join(parts))
     return "\n".join(lines)
 
@@ -248,6 +291,55 @@ def build_markdown_report(card, finances, taxes, arbitr) -> str:
     md.append("🧑‍💼 **Руководитель**")
     md.append(head)
     md.append("")
+    # Дополнительные данные (если есть)
+    if getattr(card, "opf", None) or getattr(card, "charter_capital", None):
+        opf = getattr(card, "opf", None) or "—"
+        cap = format_amount(card.charter_capital) if getattr(card, "charter_capital", None) is not None else "—"
+        md.append("🏢 **Орг. форма и капитал**")
+        md.append(f"ОПФ: {opf}; Уставный капитал: {cap}")
+        md.append("")
+    if getattr(card, "owners", None):
+        try:
+            owners = card.owners or []
+            owner_lines = []
+            for o in owners[:5]:
+                if not isinstance(o, dict):
+                    continue
+                name = o.get("name") or o.get("НаимПолн") or o.get("НаимСокр") or "—"
+                share = None
+                if o.get("Доля") and isinstance(o.get("Доля"), dict):
+                    share = o["Доля"].get("Процент")
+                share = share or o.get("share") or o.get("percent")
+                if share is not None:
+                    owner_lines.append(f"{name} — {share}%")
+                else:
+                    owner_lines.append(name)
+            if owner_lines:
+                md.append("👥 **Собственники**")
+                md.append("; ".join(owner_lines))
+                md.append("")
+        except Exception:
+            pass
+    if getattr(card, "tax_mode", None) or getattr(card, "workers_count", None):
+        md.append("🏛️ **Налоги и сотрудники**")
+        md.append(f"Режим: {getattr(card, 'tax_mode', None) or '—'}; СЧР: {getattr(card, 'workers_count', None) or '—'}")
+        md.append("")
+    md.append("📞 **Контакты**")
+    md.append(_fmt_contacts(card))
+    md.append("")
+    if getattr(card, "predecessors", None) or getattr(card, "successors", None) or getattr(card, "negative_lists", None):
+        flags = []
+        if getattr(card, "predecessors", None):
+            flags.append("правопредшественники")
+        if getattr(card, "successors", None):
+            flags.append("правопреемники")
+        neg = getattr(card, "negative_lists", None) or {}
+        if isinstance(neg, dict) and any(bool(v) for v in neg.values()):
+            flags.append("негативные списки")
+        if flags:
+            md.append("⚠️ **Особые отметки**")
+            md.append(", ".join(flags))
+            md.append("")
     md.append("🧩 **МСП**")
     md.append(msme_line)
     md.append("")

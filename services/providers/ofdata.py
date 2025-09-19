@@ -10,6 +10,7 @@ import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from .base import CompanyProvider
+import logging
 
 DEFAULT_BASE_URL = os.getenv("OFDATA_API", "https://ofdata.ru/api")
 API_KEY = os.getenv("OFDATA_KEY")
@@ -53,6 +54,7 @@ class OFDataClient(CompanyProvider):
         self.api_key = api_key
         self.timeout = timeout
         self._client = httpx.Client(base_url=self.base_url, timeout=self.timeout)
+        self._log = logging.getLogger(__name__)
         # Simple local rate limit: not more than RATE_QPM per minute
         self._ticks = deque(maxlen=RATE_QPM)
 
@@ -80,11 +82,17 @@ class OFDataClient(CompanyProvider):
         params["key"] = self.api_key  # key ALWAYS added to query
         url = path if path.startswith("/") else f"/{path}"
         try:
+            # Log outbound request (redact key)
+            log_params = {k: ("***" if k == "key" else v) for k, v in params.items()}
+            self._log.info("OFData GET", extra={"url": url, "params": log_params})
             resp = self._client.get(url, params=params)
         except httpx.RequestError as e:
+            self._log.error("OFData network error", extra={"url": url, "error": str(e)})
             raise OFDataServerTemporaryError(f"network error: {e}") from e
 
         status = resp.status_code
+        body_preview = resp.text[:500] if resp.content else ""
+        self._log.info("OFData RESP", extra={"url": url, "status": status, "bytes": len(resp.content or b'') , "body_preview": body_preview})
         if status == 403:
             raise OFDataClientError("403: access denied for current key/tariff")
         if status in (500, 502, 503, 504):
@@ -140,6 +148,7 @@ class OFDataClient(CompanyProvider):
         if not inn and not ogrn:
             raise OFDataClientError("finance requires inn or ogrn")
         params = {"inn": inn} if inn else {"ogrn": ogrn}
+        params["extended"] = True
         return self._get(FINANCES_PATH, params=params)
 
     def get_paid_taxes(self, *, inn: Optional[str] = None, ogrn: Optional[str] = None) -> Dict[str, Any]:

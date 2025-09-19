@@ -146,13 +146,37 @@ def get_cache_service() -> CacheService:
     return _cache_service
 
 
-async def get_cached(key: str) -> Optional[Any]:
-    """Получает значение из кэша"""
+def _build_cache_key(provider: str, endpoint: str, identifier: str) -> str:
+    """Build cache key with provider name to avoid collisions"""
+    return f"{provider}:{endpoint}:{identifier}"
+
+
+def _get_ttl_for_endpoint(endpoint: str) -> int:
+    """Get TTL hours for specific endpoint from environment"""
+    from settings import (
+        TTL_COUNTERPARTY_H, TTL_FINANCE_H, TTL_PAIDTAX_H, TTL_ARBITRAGE_H
+    )
+    
+    ttl_map = {
+        "counterparty": TTL_COUNTERPARTY_H,
+        "finance": TTL_FINANCE_H,
+        "paid_taxes": TTL_PAIDTAX_H,
+        "arbitration": TTL_ARBITRAGE_H,
+    }
+    
+    return ttl_map.get(endpoint, 24)  # Default 24 hours
+
+
+async def get_cached(provider: str, endpoint: str, identifier: str) -> Optional[Any]:
+    """Получает значение из кэша с учетом провайдера"""
+    key = _build_cache_key(provider, endpoint, identifier)
     return await get_cache_service().get(key)
 
 
-async def set_cached(key: str, value: Any, ttl_hours: Optional[int] = None) -> bool:
-    """Сохраняет значение в кэш"""
+async def set_cached(provider: str, endpoint: str, identifier: str, value: Any) -> bool:
+    """Сохраняет значение в кэш с учетом провайдера и TTL"""
+    key = _build_cache_key(provider, endpoint, identifier)
+    ttl_hours = _get_ttl_for_endpoint(endpoint)
     return await get_cache_service().set(key, value, ttl_hours)
 
 

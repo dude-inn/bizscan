@@ -8,7 +8,7 @@ router = Router()
 @router.message(F.text.regexp(r"^\s*(\d{10}|\d{12}|\d{13}|\d{15})\s*$"))
 async def handle_inn_ogrn(msg: Message):
     q = msg.text.strip()
-    md = fetch_company_report_markdown(q)
+    md = await fetch_company_report_markdown(q)
     await msg.answer(md, disable_web_page_preview=True, parse_mode="HTML")
 
 @router.message(F.text)

@@ -29,6 +29,8 @@ async def menu_report(cb: CallbackQuery, state: FSMContext):
     await state.set_state(MenuState.REPORT_MENU)
 
 
+
+
 @router.callback_query(F.data == "menu_info")
 async def menu_info(cb: CallbackQuery):
     text = (

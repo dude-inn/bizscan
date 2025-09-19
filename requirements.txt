@@ -16,6 +16,9 @@ openpyxl>=3.1.0
 # Retry and resilience
 tenacity>=8.2.0
 
+# AI and enrichment
+openai>=1.0.0
+
 # XML processing for SOAP
 lxml>=4.9.0
 

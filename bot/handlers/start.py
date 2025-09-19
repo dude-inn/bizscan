@@ -12,7 +12,8 @@ router = Router(name="start")
 @router.message(CommandStart())
 async def on_start(message: Message, state: FSMContext):
     await message.answer(
-        f"👋 Добро пожаловать в {BRAND_NAME}! Выберите действие:",
+        f"👋 Добро пожаловать в {BRAND_NAME}!\n\n"
+        f"Выберите действие:",
         reply_markup=main_menu_kb()
     )
     await state.set_state(MenuState.MAIN)

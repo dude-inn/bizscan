@@ -14,3 +14,4 @@ class SearchState(StatesGroup):
 class ReportState(StatesGroup):
     CHOOSE = State()
     GENERATE = State()
+

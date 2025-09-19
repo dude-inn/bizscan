@@ -46,14 +46,17 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 DADATA_API_KEY = os.getenv("DADATA_API_KEY")
 DADATA_SECRET_KEY = os.getenv("DADATA_SECRET_KEY")
 
-# === DataNewton ===
-DATANEWTON_API = os.getenv("DATANEWTON_API", "")
-DATANEWTON_TOKEN = os.getenv("DATANEWTON_TOKEN")
+# === Data Source Configuration === (OFData only)
+DATASOURCE = "ofdata"
 DATANEWTON_TIMEOUT = _get_int("DATANEWTON_TIMEOUT", 10)
 DATANEWTON_MAX_RETRIES = _get_int("DATANEWTON_MAX_RETRIES", 2)
 DATANEWTON_RATE_LIMIT_QPM = _get_int("DATANEWTON_RATE_LIMIT_QPM", 70)
-DATANEWTON_AUTH_SCHEME = os.getenv("DATANEWTON_AUTH_SCHEME", "Bearer")  # Bearer | X-API-Key
 FEATURE_DATANEWTON = _get_bool("FEATURE_DATANEWTON", True)
+
+# === OFData (placeholder for Phase 2) ===
+OFDATA_API = os.getenv("OFDATA_API", "https://ofdata.ru/api")
+OFDATA_KEY = os.getenv("OFDATA_KEY")
+FEATURE_OFDATA = _get_bool("FEATURE_OFDATA", False)
 
 # === Реестр МСП ===
 MSME_DATA_URL = os.getenv(
@@ -102,9 +105,28 @@ MAX_RETRIES = _get_int("MAX_RETRIES", 2)
 CACHE_TTL_HOURS = _get_int("CACHE_TTL_HOURS", 24)
 SQLITE_PATH = os.getenv("SQLITE_PATH", "data/cache.db")
 
+# === TTL Settings ===
+TTL_COUNTERPARTY_H = _get_int("TTL_COUNTERPARTY_H", 72)
+TTL_FINANCE_H = _get_int("TTL_FINANCE_H", 168)
+TTL_PAIDTAX_H = _get_int("TTL_PAIDTAX_H", 168)
+TTL_ARBITRAGE_H = _get_int("TTL_ARBITRAGE_H", 12)
+
 # === Брендирование ===
 BRAND_NAME = os.getenv("BRAND_NAME", "BizScan")
 BRAND_LINK = os.getenv("BRAND_LINK")
+
+# === Web Search Providers ===
+SEARCH_PROVIDER = os.getenv("SEARCH_PROVIDER", "serper").strip().lower()
+SERPER_API_KEY = os.getenv("SERPER_API_KEY", "")
+SERPAPI_KEY = os.getenv("SERPAPI_KEY", "")
+BING_SEARCH_KEY = os.getenv("BING_SEARCH_KEY", "")
+SEARCH_HTTP_TIMEOUT = float(os.getenv("SEARCH_HTTP_TIMEOUT", "10"))
+SEARCH_MAX_RESULTS = int(os.getenv("SEARCH_MAX_RESULTS", "6"))
+SEARCH_QPM = int(os.getenv("SEARCH_QPM", "30"))
+
+# === OpenAI для Gamma.app ===
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL_GAMMA = os.getenv("OPENAI_MODEL_GAMMA", "gpt-4o-mini")
 
 # === Логирование ===
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

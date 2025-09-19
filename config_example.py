@@ -7,6 +7,24 @@
 # === Telegram ===
 BOT_TOKEN = "your_bot_token_here"
 
+# === Data Source Configuration (OFData only) ===
+DATASOURCE = "ofdata"
+
+# DataNewton removed
+
+# === OFData API (для поиска по названию) ===
+OFDATA_API = "https://ofdata.ru/api"
+OFDATA_KEY = "your_ofdata_api_key_here"
+OFDATA_RATE_LIMIT_QPM = 70
+
+# OFData endpoint paths
+OFDATA_PATH_SEARCH = "/v2/search"
+OFDATA_PATH_COMPANY = "/v2/company"
+OFDATA_PATH_FINANCES = "/v2/finances"
+OFDATA_PATH_LEGAL_CASES = "/v2/legal-cases"
+OFDATA_PATH_CONTRACTS = "/v2/contracts"
+OFDATA_PATH_ENFORCEMENTS = "/v2/enforcements"
+
 # === DaData API ===
 DADATA_API_KEY = "your_dadata_api_key_here"
 DADATA_SECRET_KEY = "your_dadata_secret_key_here"
@@ -58,6 +76,25 @@ SQLITE_PATH = "data/cache.db"
 # === Брендирование ===
 BRAND_NAME = "BizScan"
 BRAND_LINK = None
+
+# === Web Search Providers (для ИИ-обогащения) ===
+SEARCH_PROVIDER = "serper"  # serper | serpapi | bing
+SERPER_API_KEY = "your_serper_api_key_here"
+SERPAPI_KEY = "your_serpapi_key_here"
+BING_SEARCH_KEY = "your_bing_search_key_here"
+SEARCH_HTTP_TIMEOUT = 10
+SEARCH_MAX_RESULTS = 6
+SEARCH_QPM = 30
+
+# === OpenAI для ИИ-обогащения ===
+OPENAI_API_KEY = "your_openai_api_key_here"
+OPENAI_MODEL_GAMMA = "gpt-4o-mini"
+
+# === TTL Settings (в часах) ===
+TTL_COUNTERPARTY_H = 72
+TTL_FINANCE_H = 168
+TTL_PAIDTAX_H = 168
+TTL_ARBITRAGE_H = 12
 
 # === Логирование ===
 LOG_LEVEL = "INFO"

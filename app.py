@@ -3,6 +3,7 @@
 Главный файл приложения BizScan Bot
 """
 import asyncio
+import sys
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 
@@ -12,12 +13,17 @@ from core.logger import setup_logging
 from bot.middlewares.throttling import ThrottlingMiddleware
 from bot.middlewares.errors import ErrorsMiddleware
 
+# Set Windows event loop policy
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 # Routers
 from bot.handlers.start import router as start_router
 from bot.handlers.menu import router as menu_router
 from bot.handlers.search import router as search_router
 from bot.handlers.company import router as company_router
 from bot.handlers.report import router as report_router
+from bot.handlers.check import router as check_router
 
 
 async def main():
@@ -25,6 +31,7 @@ async def main():
     log = setup_logging()
     log.info("Starting application initialization")
     
+    bot = None
     try:
         log.info("Loading settings...")
         settings = load_settings()
@@ -80,6 +87,7 @@ async def main():
         dp.include_router(search_router)
         dp.include_router(company_router)
         dp.include_router(report_router)
+        dp.include_router(check_router)
         log.info("All routers included successfully")
     except Exception as e:
         log.error("Failed to include routers", error=str(e))
@@ -91,6 +99,11 @@ async def main():
     except Exception as e:
         log.error("Bot polling failed", error=str(e))
         raise
+    finally:
+        if bot:
+            log.info("Closing bot session...")
+            await bot.session.close()
+            log.info("Bot session closed")
 
 
 if __name__ == "__main__":

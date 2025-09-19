@@ -15,12 +15,8 @@ from bot.states import SearchState, ReportState
 from bot.keyboards.main import choose_report_kb, report_menu_kb
 from services.aggregator import fetch_company_report_markdown
 from core.logger import setup_logging
-from services.providers.datanewton import DNClientError, DNServerTemporaryError
+from services.providers.ofdata import OFDataClientError, OFDataServerTemporaryError
 from settings import (
-    DADATA_API_KEY, DADATA_SECRET_KEY,
-    MSME_DATA_URL, MSME_LOCAL_FILE, FEATURE_MSME,
-    EFRSB_API_URL, EFRSB_API_KEY, FEATURE_EFRSB,
-    KAD_API_URL, KAD_API_KEY, FEATURE_KAD, KAD_MAX_CASES,
     REQUEST_TIMEOUT, MAX_RETRIES
 )
 
@@ -77,7 +73,7 @@ async def free_report(cb: CallbackQuery, state: FSMContext):
         
         # Получаем отчёт компании
         log.info("Fetching company report", query=query, user_id=cb.from_user.id)
-        response = fetch_company_report_markdown(query)
+        response = await fetch_company_report_markdown(query)
         
         if not response or response.startswith("Укажите корректный"):
             log.warning("Invalid query or company not found", query=query, user_id=cb.from_user.id)
@@ -109,15 +105,17 @@ async def free_report(cb: CallbackQuery, state: FSMContext):
         # Сохраняем данные в состоянии для скачивания TXT
         await state.update_data(company_text=response)
         
-    except DNClientError as e:
+    except (OFDataClientError) as e:
         if "404" in str(e) or "409" in str(e):
-            await status_msg.edit_text("❌ Контрагент не найден. Проверьте ИНН/ОГРН и попробуйте снова.")
-        elif "403" in str(e):
-            await status_msg.edit_text("❌ Доступ к DataNewton запрещён (403). Проверьте ключ и тариф.")
+            await status_msg.edit_text("❌ Контрагент не найден по указанным данным.")
+        elif "403" in str(e) or "401" in str(e):
+            await status_msg.edit_text("❌ Доступ к источнику ограничен или неверный ключ.")
+        elif "404" in str(e) and "Страница не найдена" in str(e):
+            await status_msg.edit_text("❌ Источник данных недоступен. Проверьте настройки API ключа.")
         else:
-            await status_msg.edit_text(f"❌ Ошибка DataNewton: {str(e)}")
-    except DNServerTemporaryError as e:
-        await status_msg.edit_text(f"❌ Временная ошибка сервера DataNewton: {str(e)}")
+            await status_msg.edit_text(f"❌ Ошибка получения данных: {str(e)}")
+    except (OFDataServerTemporaryError) as e:
+        await status_msg.edit_text("❌ Источник временно недоступен, повторите позже.")
     except Exception as e:
         log.error("Free report failed", 
                  error=str(e), 

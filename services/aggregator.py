@@ -277,8 +277,12 @@ def build_markdown_report(card, finances, taxes, arbitr) -> str:
     elif card.is_msme is False:
         msme_line = "Не является субъектом МСП"
 
+    from datetime import datetime
+    today = datetime.now().strftime("%Y-%m-%d")
     md = []
-    md.append("🧾 **Реквизиты**")
+    md.append(f"🧾 {card.name_full} • {card.name_short or ''} — {today}")
+    md.append("")
+    md.append("**Реквизиты**")
     short = f' • {card.name_short}' if card.name_short else ""
     md.append(f'{card.name_full}{short}')
     md.append(f'ИНН {card.inn} • ОГРН {card.ogrn or "—"}{f" • КПП {card.kpp}" if card.kpp else ""}')
@@ -355,7 +359,64 @@ def build_markdown_report(card, finances, taxes, arbitr) -> str:
     
     # Дополнительный блок для Gamma отправляется отдельным сообщением в хендлере
     
-    md.append("Данные собраны из официальных открытых реестров РФ.")
+    # Добавляем блок для Gamma (описательная секция на основе карточки/реестров)
+    try:
+        from services.enrichment.official_sources import build_official_links
+        from services.enrichment.openai_gamma_enricher import generate_gamma_section
+        # Собираем базовые поля компании
+        company_dict = {
+            "name_full": card.name_full,
+            "name": card.name_short,
+            "inn": card.inn,
+            "ogrn": card.ogrn,
+            "okved": card.okved,
+            "opf": getattr(card, "opf", None),
+            "status_code": getattr(card, "status_code", None),
+            "status_text": getattr(card, "status_text", None),
+            "registration_date": getattr(card, "registration_date", None),
+            "address": card.address,
+            "manager_name": getattr(card, "manager_name", None),
+            "manager_post": getattr(card, "manager_post", None),
+            "charter_capital": getattr(card, "charter_capital", None),
+            "owners": getattr(card, "owners", None),
+            "tax_mode": getattr(card, "tax_mode", None),
+            "workers_count": getattr(card, "workers_count", None),
+            "contacts": getattr(card, "contacts", None),
+            "predecessors": getattr(card, "predecessors", None),
+            "successors": getattr(card, "successors", None),
+            "negative_flags": getattr(card, "negative_lists", None),
+        }
+        # Финансы компакт: последний период
+        fin_digest = {}
+        if finances:
+            last = sorted(finances, key=lambda x: x.period)[-1]
+            fin_digest = {
+                "last_year": last.period,
+                "revenue": last.revenue,
+                "profit": last.net_profit,
+                "assets": last.assets,
+                "equity": last.equity,
+            }
+        company_dict["finances_digest"] = fin_digest
+        # Official links
+        site = None
+        if isinstance(getattr(card, "contacts", None), dict):
+            c = card.contacts or {}
+            site = c.get("site") or c.get("website")
+            if isinstance(site, dict):
+                site = site.get("value") or site.get("url") or site.get("site")
+        official_links = build_official_links(card.inn, card.ogrn, site)
+        gamma_md = generate_gamma_section(company_dict, official_links)
+        if gamma_md:
+            md.append("### 🌐 Дополнительно (для Gamma)")
+            md.append(gamma_md)
+            md.append("")
+    except Exception:
+        # Если обогащение недоступно — продолжаем без ошибки
+        pass
+
+    # Дисклеймер
+    md.append("Данные собраны из официальных открытых реестров РФ (ЕГРЮЛ/Росстат, ФНС — ГИР БО, КАД).")
     return "\n".join(md)
 
 

@@ -12,7 +12,8 @@ router = Router(name="start")
 @router.message(CommandStart())
 async def on_start(message: Message, state: FSMContext):
     await message.answer(
-        "Привет! Я соберу профиль компании из официальных источников РФ (ЕГРЮЛ/Росстат, ФНС, КАД).",
-        reply_markup=main_menu_kb()
+        "Привет! Я соберу профиль компании из официальных источников РФ. Что делаем?",
+        reply_markup=main_menu_kb(),
+        disable_web_page_preview=True,
     )
     await state.set_state(MenuState.MAIN)

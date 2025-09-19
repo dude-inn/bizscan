@@ -10,6 +10,7 @@ from aiogram.fsm.context import FSMContext
 from bot.keyboards.main import main_menu_kb, report_menu_kb, results_kb, choose_report_kb
 from bot.states import SearchState, MenuState
 from core.logger import setup_logging
+from services.providers.ofdata import OFDataClient, OFDataClientError, OFDataServerTemporaryError
 # Name-based search and DN suggestions are disabled by plan
 
 router = Router(name="search")
@@ -40,8 +41,9 @@ async def ask_inn(cb: CallbackQuery, state: FSMContext):
         "🔍 **Поиск компании**\n\n"
         "Введите ИНН (10 или 12 цифр) или ОГРН (13 или 15 цифр)",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_main")]
-        ])
+            [InlineKeyboardButton(text="⬅ Назад", callback_data="back_main")]
+        ]),
+        disable_web_page_preview=True,
     )
     await state.set_state(SearchState.ASK_INN)
     await cb.answer()
@@ -95,11 +97,34 @@ async def got_query(msg: Message, state: FSMContext):
     
     # Если это ИНН/ОГРН — сразу сохраняем и предлагаем отчёт
     if _is_inn(query) or _is_ogrn(query):
-        await state.update_data(query=query)
-        await msg.answer(
-            "✅ Запрос сохранён. Выберите тип отчёта:",
-            reply_markup=choose_report_kb()
-        )
+        # Подтягиваем карточку из OFData для предпросмотра
+        preview = {"inn": query}
+        try:
+            client = OFDataClient()
+            raw = client.get_counterparty(inn=query if _is_inn(query) else None, ogrn=query if _is_ogrn(query) else None)
+            data = raw.get("company") or raw.get("data") or raw
+            names = (data.get("company_names") or {}) if isinstance(data, dict) else {}
+            name_full = data.get("НаимПолн") or names.get("full_name") or data.get("full_name") or data.get("name")
+            name_short = data.get("НаимСокр") or names.get("short_name") or data.get("short_name")
+            addr_obj = data.get("address") or data.get("ЮрАдрес") or {}
+            address = addr_obj.get("value") or addr_obj.get("АдресРФ") or addr_obj.get("full_address") or addr_obj.get("address") if isinstance(addr_obj, dict) else None
+            preview.update({
+                "name_full": name_full,
+                "name_short": name_short,
+                "address": address,
+                "ogrn": raw.get("ogrn") or data.get("ОГРН") or data.get("ogrn"),
+            })
+        except (OFDataClientError, OFDataServerTemporaryError) as e:
+            log.warning("OFData preview failed", error=str(e))
+        await state.update_data(query=query, company_preview=preview)
+        # Собираем динамическую кнопку
+        title = preview.get("name_short") or preview.get("name_full") or query
+        short_addr = (preview.get("address") or "").split(",")[0]
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"📄 Сформировать отчёт — {title}, {short_addr or '—'}, ИНН {query}", callback_data="report_free")],
+            [InlineKeyboardButton(text="⬅ Назад", callback_data="back_main")],
+        ])
+        await msg.answer("✅ Данные получены. Подтвердите формирование отчёта:", reply_markup=kb, disable_web_page_preview=True)
         await state.set_state(SearchState.SELECT)
         return
     # Поиск по названию отключён
@@ -112,8 +137,9 @@ async def back_to_search(cb: CallbackQuery, state: FSMContext):
     await cb.message.edit_text(
         "🔍 **Поиск компании**\n\nВведите ИНН или ОГРН:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_main")]
-        ])
+            [InlineKeyboardButton(text="⬅ Назад", callback_data="back_main")]
+        ]),
+        disable_web_page_preview=True,
     )
     await state.set_state(SearchState.ASK_INN)
     await cb.answer()

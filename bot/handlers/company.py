@@ -100,7 +100,8 @@ async def free_report(cb: CallbackQuery, state: FSMContext):
         
         await status_msg.edit_text(
             "✅ Отчет готов! Нажмите кнопку ниже для скачивания файла.",
-            reply_markup=keyboard
+            reply_markup=keyboard,
+            disable_web_page_preview=True,
         )
         log.info("Free report completed successfully", user_id=cb.from_user.id)
         

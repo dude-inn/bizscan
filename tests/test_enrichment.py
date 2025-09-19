@@ -4,39 +4,14 @@ Tests for enrichment modules
 """
 import pytest
 from unittest.mock import patch, Mock
-from services.enrichment.search_providers import search_company_context
 from services.enrichment.openai_gamma_enricher import generate_gamma_section, build_user_prompt
 from bot.formatters.gamma_insert import build_gamma_block_for_company
 
 
-class TestSearchProviders:
-    """Test search providers functionality"""
-    
-    def test_search_company_context_empty_name(self):
-        """Test search with empty company name"""
-        result = search_company_context("")
-        assert result == []
-    
-    def test_search_company_context_with_name(self):
-        """Test search with company name"""
-        with patch('services.enrichment.search_providers._serper_search') as mock_search:
-            mock_search.return_value = [
-                {"title": "Test Company", "url": "https://test.com", "snippet": "Test snippet", "source": "web"}
-            ]
-            
-            result = search_company_context("Test Company")
-            assert len(result) == 1
-            assert result[0]["title"] == "Test Company"
-            assert result[0]["url"] == "https://test.com"
-    
-    def test_search_company_context_with_extra_queries(self):
-        """Test search with extra queries"""
-        with patch('services.enrichment.search_providers._serper_search') as mock_search:
-            mock_search.return_value = []
-            
-            result = search_company_context("Test Company", ["test query"])
-            # Should call search multiple times (company name + extra queries)
-            assert mock_search.call_count > 1
+class TestSearchProvidersRemoved:
+    def test_search_providers_module_removed(self):
+        with pytest.raises(ModuleNotFoundError):
+            __import__('services.enrichment.search_providers')
 
 
 class TestOpenAIGammaEnricher:
@@ -85,7 +60,7 @@ class TestOpenAIGammaEnricher:
     def test_generate_gamma_section_with_api_key(self):
         """Test gamma section generation with API key"""
         with patch.dict('os.environ', {'OPENAI_API_KEY': 'test-key'}, clear=True):
-            with patch('openai.OpenAI') as mock_openai:
+        with patch('openai.OpenAI') as mock_openai:
                 mock_client = Mock()
                 mock_response = Mock()
                 mock_response.choices = [Mock()]
@@ -107,10 +82,8 @@ class TestGammaInsert:
     
     def test_build_gamma_block_for_company(self):
         """Test building gamma block for company"""
-        with patch('services.enrichment.search_providers.search_company_context') as mock_search:
-            with patch('services.enrichment.openai_gamma_enricher.generate_gamma_section') as mock_generate:
-                mock_search.return_value = [{"title": "Test", "url": "https://test.com", "snippet": "Test snippet"}]
-                mock_generate.return_value = "Generated gamma content"
+        with patch('services.enrichment.openai_gamma_enricher.generate_gamma_section') as mock_generate:
+            mock_generate.return_value = "Generated gamma content"
                 
                 company = {
                     "name_full": "Test Company",
@@ -124,15 +97,12 @@ class TestGammaInsert:
                 result = build_gamma_block_for_company(company)
                 
                 assert result == "Generated gamma content"
-                mock_search.assert_called_once_with("Test Company")
                 mock_generate.assert_called_once()
     
     def test_build_gamma_block_fallback_name(self):
         """Test building gamma block with fallback to INN/OGRN"""
-        with patch('services.enrichment.search_providers.search_company_context') as mock_search:
-            with patch('services.enrichment.openai_gamma_enricher.generate_gamma_section') as mock_generate:
-                mock_search.return_value = []
-                mock_generate.return_value = "Generated content"
+        with patch('services.enrichment.openai_gamma_enricher.generate_gamma_section') as mock_generate:
+            mock_generate.return_value = "Generated content"
                 
                 company = {
                     "name_full": "",
@@ -142,6 +112,4 @@ class TestGammaInsert:
                 
                 result = build_gamma_block_for_company(company)
                 
-                # Should use INN as fallback
-                mock_search.assert_called_once_with("1234567890")
                 assert result == "Generated content"

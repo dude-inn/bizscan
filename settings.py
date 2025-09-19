@@ -115,14 +115,7 @@ TTL_ARBITRAGE_H = _get_int("TTL_ARBITRAGE_H", 12)
 BRAND_NAME = os.getenv("BRAND_NAME", "BizScan")
 BRAND_LINK = os.getenv("BRAND_LINK")
 
-# === Web Search Providers ===
-SEARCH_PROVIDER = os.getenv("SEARCH_PROVIDER", "serper").strip().lower()
-SERPER_API_KEY = os.getenv("SERPER_API_KEY", "")
-SERPAPI_KEY = os.getenv("SERPAPI_KEY", "")
-BING_SEARCH_KEY = os.getenv("BING_SEARCH_KEY", "")
-SEARCH_HTTP_TIMEOUT = float(os.getenv("SEARCH_HTTP_TIMEOUT", "10"))
-SEARCH_MAX_RESULTS = int(os.getenv("SEARCH_MAX_RESULTS", "6"))
-SEARCH_QPM = int(os.getenv("SEARCH_QPM", "30"))
+# Web search providers removed
 
 # === OpenAI для Gamma.app ===
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")

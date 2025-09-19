@@ -8,8 +8,9 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 def main_menu_kb() -> InlineKeyboardMarkup:
     """Главное меню"""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔍 Найти компанию", callback_data="menu_report")],
-        [InlineKeyboardButton(text="ℹ️ Информация", callback_data="menu_info")],
+        [InlineKeyboardButton(text="📄 Сформировать отчёт", callback_data="menu_report")],
+        [InlineKeyboardButton(text="🔎 Поиск по названию", callback_data="search_name")],
+        [InlineKeyboardButton(text="❓ Помощь", callback_data="menu_info")],
     ])
 
 
@@ -17,7 +18,7 @@ def report_menu_kb() -> InlineKeyboardMarkup:
     """Меню поиска"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔢 Ввести ИНН/ОГРН", callback_data="search_inn")],
-        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_main")],
+        [InlineKeyboardButton(text="⬅ Назад", callback_data="back_main")],
     ])
 
 

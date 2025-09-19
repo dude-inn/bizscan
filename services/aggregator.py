@@ -261,37 +261,9 @@ def build_markdown_report(card, finances, taxes, arbitr) -> str:
     md.append(_fmt_arbitration(arbitr))
     md.append("")
     
-    # Добавляем Gamma блок если доступен
-    try:
-        logger.info("🤖 Starting AI enrichment process")
-        from bot.formatters.gamma_insert import build_gamma_block_for_company
-        
-        company_data = {
-            "name_full": card.name_full,
-            "name_short": card.name_short,
-            "inn": card.inn,
-            "ogrn": card.ogrn,
-            "okved": card.okved,
-            "address": card.address,
-        }
-        logger.info(f"📊 Company data for enrichment: {company_data.get('name_full', 'Unknown')}")
-        
-        gamma_block = build_gamma_block_for_company(company_data)
-        logger.info(f"📝 Gamma block generated: {len(gamma_block)} characters")
-        
-        if gamma_block and not gamma_block.startswith("_Добавьте OPENAI_API_KEY"):
-            logger.info("✅ Adding AI enrichment block to report")
-            md.append("🤖 **Дополнительная информация**")
-            md.append(gamma_block)
-            md.append("")
-        else:
-            logger.warning("⚠️ Gamma block not added (API key missing or error)")
-    except Exception as e:
-        logger.error(f"❌ AI enrichment failed: {e}")
-        # Если Gamma блок недоступен, просто пропускаем
-        pass
+    # Дополнительный блок для Gamma отправляется отдельным сообщением в хендлере
     
-    md.append("🔗 **Источники:** " + _fmt_sources())
+    md.append("Данные собраны из официальных открытых реестров РФ.")
     return "\n".join(md)
 
 

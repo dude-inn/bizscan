@@ -3,57 +3,14 @@
 Tests for status mapping functions
 """
 import pytest
-from services.mappers.datanewton import map_status as map_status_dn
 from services.mappers.ofdata import map_status_ofdata
 
 
-class TestDataNewtonStatusMapping:
-    """Test DataNewton status mapping"""
-    
-    def test_active_status_true(self):
-        """Test active_status true maps to ACTIVE"""
-        status_obj = {
-            "active_status": True,
-            "status_rus_short": "Действует"
-        }
-        
-        code, text = map_status_dn(status_obj)
-        assert code == "ACTIVE"
-        assert text == "Действует"
-    
-    def test_active_status_false_with_date_end(self):
-        """Test active_status false with date_end maps to LIQUIDATED"""
-        status_obj = {
-            "active_status": False,
-            "date_end": "2023-01-01",
-            "status_rus_short": "Ликвидировано"
-        }
-        
-        code, text = map_status_dn(status_obj)
-        assert code == "LIQUIDATED"
-        assert text == "Ликвидировано"
-    
-    def test_active_status_false_no_date_end(self):
-        """Test active_status false without date_end maps to NOT_ACTIVE"""
-        status_obj = {
-            "active_status": False,
-            "date_end": "",
-            "status_rus_short": "Не действует"
-        }
-        
-        code, text = map_status_dn(status_obj)
-        assert code == "NOT_ACTIVE"
-        assert text == "Не действует"
-    
-    def test_unknown_status(self):
-        """Test unknown status maps to UNKNOWN"""
-        status_obj = {
-            "status_rus_short": "Неизвестно"
-        }
-        
-        code, text = map_status_dn(status_obj)
-        assert code == "UNKNOWN"
-        assert text == "Неизвестно"
+class TestDataNewtonRemoved:
+    def test_dn_mapper_removed(self):
+        import pytest
+        with pytest.raises(ModuleNotFoundError):
+            __import__("services.mappers.datanewton")
 
 
 class TestOFDataStatusMapping:

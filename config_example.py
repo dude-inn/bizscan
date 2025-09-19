@@ -77,14 +77,7 @@ SQLITE_PATH = "data/cache.db"
 BRAND_NAME = "BizScan"
 BRAND_LINK = None
 
-# === Web Search Providers (для ИИ-обогащения) ===
-SEARCH_PROVIDER = "serper"  # serper | serpapi | bing
-SERPER_API_KEY = "your_serper_api_key_here"
-SERPAPI_KEY = "your_serpapi_key_here"
-BING_SEARCH_KEY = "your_bing_search_key_here"
-SEARCH_HTTP_TIMEOUT = 10
-SEARCH_MAX_RESULTS = 6
-SEARCH_QPM = 30
+# Web search providers removed
 
 # === OpenAI для ИИ-обогащения ===
 OPENAI_API_KEY = "your_openai_api_key_here"

@@ -5,7 +5,7 @@ Tests for report rendering functions
 import pytest
 from decimal import Decimal
 from services.aggregator import build_markdown_report
-from services.mappers.datanewton import CompanyCard, FinanceSnapshot, ArbitrationCase, ArbitrationSummary
+from services.mappers.ofdata import CompanyCard, FinanceSnapshot, ArbitrationCase, ArbitrationSummary
 
 
 class TestReportRenderer:

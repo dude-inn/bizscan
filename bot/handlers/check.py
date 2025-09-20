@@ -116,7 +116,12 @@ async def _process_valid_query(msg: Message, state: FSMContext, query: str):
         )
         
         # Save data for download
+        log.info("_process_valid_query: saving company_text to state", 
+                text_length=len(response),
+                text_preview=response[:200] if response else None,
+                user_id=msg.from_user.id)
         await state.update_data(company_text=response)
+        log.info("_process_valid_query: company_text saved to state successfully", user_id=msg.from_user.id)
         
     except Exception as e:
         log.error("Check command failed", error=str(e), user_id=msg.from_user.id)
@@ -161,7 +166,12 @@ async def _process_name_search(msg: Message, state: FSMContext, query: str):
         )
         
         # Save data for download
+        log.info("_process_name_search: saving company_text to state", 
+                text_length=len(response),
+                text_preview=response[:200] if response else None,
+                user_id=msg.from_user.id)
         await state.update_data(company_text=response)
+        log.info("_process_name_search: company_text saved to state successfully", user_id=msg.from_user.id)
         
     except Exception as e:
         log.error("Name search failed", error=str(e), user_id=msg.from_user.id)

@@ -106,7 +106,12 @@ async def free_report(cb: CallbackQuery, state: FSMContext):
         log.info("Free report completed successfully", user_id=cb.from_user.id)
         
         # Сохраняем данные в состоянии для скачивания TXT
+        log.info("free_report: saving company_text to state", 
+                text_length=len(response),
+                text_preview=response[:200] if response else None,
+                user_id=cb.from_user.id)
         await state.update_data(company_text=response)
+        log.info("free_report: company_text saved to state successfully", user_id=cb.from_user.id)
 
         # Вывод Gamma-блока отключён по требованиям UX
         
@@ -126,7 +131,7 @@ async def free_report(cb: CallbackQuery, state: FSMContext):
                  error=str(e), 
                  user_id=cb.from_user.id,
                  query=query if 'query' in locals() else None)
-        await status_msg.edit_text(f"❌ Ошибка при получении данных: {str(e)}")
+        await status_msg.edit_text(f"❌ Ошибка при получении данных: {str(e)}", parse_mode=None)
 
 
 @router.callback_query(F.data == "download_txt")
@@ -137,14 +142,26 @@ async def download_txt(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     
     try:
+        log.info("download_txt: getting state data", user_id=cb.from_user.id)
         data = await state.get_data()
+        log.info("download_txt: state data retrieved", 
+                keys=list(data.keys()) if data else [], 
+                user_id=cb.from_user.id)
+        
         company_text = data.get("company_text")
+        log.info("download_txt: company_text check", 
+                has_company_text=bool(company_text),
+                text_length=len(company_text) if company_text else 0,
+                text_preview=company_text[:100] if company_text else None,
+                user_id=cb.from_user.id)
         
         if not company_text:
+            log.warning("download_txt: no company_text in state", user_id=cb.from_user.id)
             await cb.message.answer("❌ Данные не найдены. Выполните поиск заново.")
             return
         
         # Извлекаем название компании из текста отчета
+        log.info("download_txt: extracting company name from text", user_id=cb.from_user.id)
         lines = company_text.split('\n')
         company_name = "company"
         for line in lines:
@@ -154,19 +171,38 @@ async def download_txt(cb: CallbackQuery, state: FSMContext):
                     company_name = line.strip()
                     break
         
+        log.info("download_txt: extracted company name", 
+                company_name=company_name, 
+                user_id=cb.from_user.id)
+        
         safe_name = "".join(ch for ch in company_name if ch.isalnum() or ch in (" ", "_", "-"))[:64]
         from datetime import datetime
         today = datetime.now().strftime("%Y-%m-%d")
         filename = f"{safe_name}_{today}.txt"
         
+        log.info("download_txt: creating temporary file", 
+                filename=filename,
+                text_length=len(company_text),
+                user_id=cb.from_user.id)
+        
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as tmp:
             tmp.write(company_text)
             tmp_path = tmp.name
+        
+        log.info("download_txt: temporary file created", 
+                tmp_path=tmp_path,
+                user_id=cb.from_user.id)
+        
+        log.info("download_txt: sending document to user", 
+                filename=filename,
+                user_id=cb.from_user.id)
         
         await cb.message.answer_document(
             FSInputFile(tmp_path, filename=filename),
             caption="📝 TXT отчёт о компании"
         )
+        
+        log.info("download_txt: document sent successfully", user_id=cb.from_user.id)
         
         import os
         try:

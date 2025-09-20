@@ -125,6 +125,11 @@ def build_user_prompt(company: Dict[str, Any], official_links: List[str]) -> str
 
 def generate_gamma_section(company: Dict[str, Any], official_links: List[str], *, model: Optional[str] = None) -> str:
     log.info(f"🤖 Generating Gamma section for: {company.get('name_full', 'Unknown')}")
+    # official_links should already be strings from build_official_links
+    if not official_links:
+        official_links = []
+    # Ensure all are strings (defensive programming)
+    official_links = [str(link) for link in official_links if link]
     log.info(f"🔗 Official links: {len(official_links)}")
     
     api_key = os.getenv("OPENAI_API_KEY")
@@ -133,7 +138,9 @@ def generate_gamma_section(company: Dict[str, Any], official_links: List[str], *
         # fallback
         parts = [f"**{company.get('name_full') or company.get('name') or 'Компания'}**"]
         if official_links:
-            parts.append("**Источники:** " + ", ".join(official_links[:4]))
+            # Ensure all items in official_links are strings
+            official_links_str = [str(link) for link in official_links if link]
+            parts.append("**Источники:** " + ", ".join(official_links_str[:4]))
         else:
             parts.append("**Источники:** ЕГРЮЛ (ФНС); ГИР БО (ФНС); КАД")
         return "\n\n".join(parts)
@@ -168,5 +175,7 @@ def generate_gamma_section(company: Dict[str, Any], official_links: List[str], *
         parts = [f"**{company.get('name_full') or company.get('name') or 'Компания'}**"]
         parts.append(f"_Ошибка генерации: {str(e)}_")
         if official_links:
-            parts.append("**Источники:** " + ", ".join(official_links[:4]))
+            # Ensure all items in official_links are strings
+            official_links_str = [str(link) for link in official_links if link]
+            parts.append("**Источники:** " + ", ".join(official_links_str[:4]))
         return "\n\n".join(parts)

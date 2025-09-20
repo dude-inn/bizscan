@@ -18,6 +18,9 @@ class Settings:
     DADATA_API_KEY: str
     DADATA_SECRET_KEY: Optional[str]
     
+    # OFData
+    OFDATA_KEY: str
+    
     # МСП
     MSME_DATA_URL: str
     MSME_LOCAL_FILE: Optional[str]
@@ -91,6 +94,9 @@ def load_settings() -> Settings:
         # DaData
         DADATA_API_KEY=getattr(cfg, "DADATA_API_KEY", ""),
         DADATA_SECRET_KEY=getattr(cfg, "DADATA_SECRET_KEY"),
+        
+        # OFData
+        OFDATA_KEY=getattr(cfg, "OFDATA_KEY", ""),
         
         # МСП
         MSME_DATA_URL=getattr(cfg, "MSME_DATA_URL", ""),

@@ -3,6 +3,7 @@
 Обработчики поиска компаний (новая архитектура)
 """
 import re
+import asyncio
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
@@ -11,7 +12,7 @@ from bot.keyboards.main import main_menu_kb, report_menu_kb, results_kb, choose_
 from bot.states import SearchState, MenuState
 from core.logger import setup_logging
 from services.providers.ofdata import OFDataClient, OFDataClientError, OFDataServerTemporaryError
-from services.aggregator import fetch_company_report_markdown
+from services.report.builder import ReportBuilder
 # Name-based search and DN suggestions are disabled by plan
 
 router = Router(name="search")
@@ -234,17 +235,16 @@ async def got_name_query(msg: Message, state: FSMContext):
     log.info("got_name_query: status message sent", user_id=msg.from_user.id)
     
     try:
-        # Получаем список компаний через OFData
-        import asyncio
-        client = OFDataClient()
+        # Получаем список компаний через новую систему
+        builder = ReportBuilder()
         
-        # Выполняем поиск напрямую (синхронно)
-        search_results = client.search_filtered(
+        # Выполняем поиск через новую систему
+        # Используем obj="org" так как obj="company" возвращает 400
+        search_results = builder.client.search(
             by="name",
             obj="org", 
             query=query,
-            limit=20,
-            page=1
+            limit=20
         )
         
         log.info("got_name_query: search results received", 

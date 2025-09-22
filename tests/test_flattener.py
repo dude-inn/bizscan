@@ -216,3 +216,4 @@ class TestFlattener:
         assert result == {
             "НеизвестноеПоле": "значение"
         }
+

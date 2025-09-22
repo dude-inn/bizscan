@@ -1,66 +1,125 @@
 # -*- coding: utf-8 -*-
 """
-Рендер секции с арбитражными делами
+Рендер секции с арбитражными делами - максимально простой
 """
-from typing import Dict, Any, List
-from .formatters import format_money, format_date, format_list, clean_text
-from .flattener import flatten, apply_aliases, extract_nested_value, count_array_items, sum_array_field
+from typing import Dict, Any
+from .simple_company_renderer import format_value, format_dict_item
 
 
 def render_legal(data: Dict[str, Any]) -> str:
     """
-    Рендерит арбитражные дела
+    Рендерит арбитражные дела с сокращенным форматом
     
     Args:
         data: Данные арбитражных дел
         
     Returns:
-        Арбитражные дела
+        Информация об арбитражных делах
     """
     lines = []
+    aliases = load_legal_aliases()
     
-    if not data or 'data' not in data:
-        return "—"
-    
-    data_section = data['data']
-    
-    # Итоги
-    total_cases = data_section.get('ЗапВсего', 0)
-    total_amount = data_section.get('ОбщСуммИск', 0)
-    
-    lines.append(f"Всего дел: {total_cases}")
-    
-    if total_amount > 0:
-        lines.append(f"Общая сумма исков: {format_money(total_amount)}")
-        
-        if total_cases > 0:
-            avg_amount = total_amount / total_cases
-            lines.append(f"Средняя сумма иска: {format_money(avg_amount)}")
-    
-    # Список дел
-    records = data_section.get('Записи', [])
-    if records:
-        lines.append(f"\n10 последних дел:")
-        
-        for i, record in enumerate(records[:10]):  # Показываем только первые 10
-            case_num = record.get('Номер', '—')
-            date = record.get('Дата', '—')
-            court = record.get('Суд', '—')
-            amount = record.get('СуммИск', 0)
+    # Обрабатываем основные поля
+    for key, value in data.items():
+        if key == 'data' and isinstance(value, dict):
+            # Обрабатываем данные дел
+            records = value.get('Записи', [])
+            if records:
+                # Фильтруем дела за последние 5 лет
+                current_year = 2025
+                min_year = current_year - 5  # 2020
+                filtered_records = []
+                
+                for case in records:
+                    case_date = case.get('Дата', '')
+                    if case_date:
+                        try:
+                            # Парсим дату (формат: YYYY-MM-DD)
+                            year = int(case_date.split('-')[0])
+                            if year >= min_year:
+                                filtered_records.append(case)
+                        except (ValueError, IndexError):
+                            # Если не можем распарсить дату, включаем дело
+                            filtered_records.append(case)
+                    else:
+                        # Если даты нет, включаем дело
+                        filtered_records.append(case)
+                
+                records = filtered_records
+                lines.append("АРБИТРАЖНЫЕ ДЕЛА")
+                lines.append("=" * 50)
+                
+                # Статистика
+                total_cases = len(records)
+                total_amount = sum(case.get('СуммИск', 0) for case in records if isinstance(case.get('СуммИск'), (int, float)))
+                plaintiff_count = sum(1 for case in records if case.get('Ист'))
+                defendant_count = sum(1 for case in records if case.get('Ответ'))
+                
+                lines.append(f"Всего дел: {total_cases}")
+                lines.append(f"Общая сумма исков: {total_amount:,.2f} руб.")
+                lines.append(f"Как истец: {plaintiff_count} дел")
+                lines.append(f"Как ответчик: {defendant_count} дел")
+                lines.append("")
+                
+                # Список дел (сокращенный формат)
+                lines.append("Список дел:")
+                for i, case in enumerate(records, 1):
+                    # Определяем роль компании
+                    role = "Истец" if case.get('Ист') else "Ответчик" if case.get('Ответ') else "Неизвестно"
+                    
+                    # Форматируем сумму
+                    amount = case.get('СуммИск', 0)
+                    if isinstance(amount, (int, float)):
+                        amount_str = f"{amount:,.2f}"
+                    else:
+                        amount_str = str(amount)
+                    
+                    # Сокращенная запись
+                    case_line = f"{i}. {case.get('Номер', 'N/A')} | {case.get('Дата', 'N/A')} | {case.get('Суд', 'N/A')} | {amount_str} руб. | {role} | {case.get('СтрКАД', 'N/A')}"
+                    lines.append(case_line)
+            else:
+                lines.append("АРБИТРАЖНЫЕ ДЕЛА")
+                lines.append("=" * 50)
+                lines.append("Данные недоступны")
+        else:
+            # Обрабатываем остальные поля обычно
+            alias = aliases.get(key, key)
             
-            # Участники дела
-            plaintiffs = record.get('Ист', [])
-            defendants = record.get('Ответ', [])
+            if isinstance(value, dict):
+                if not value:
+                    lines.append(f"{alias}: отсутствуют")
+                else:
+                    lines.append(f"{alias}:")
+                    for sub_key, sub_value in value.items():
+                        sub_alias = aliases.get(f"{key}.{sub_key}", aliases.get(sub_key, sub_key))
+                        formatted_value = format_value(sub_value)
+                        lines.append(f"  {sub_alias}: {formatted_value}")
             
-            # Форматируем участников
-            plaintiffs_text = format_list(plaintiffs) if plaintiffs else "—"
-            defendants_text = format_list(defendants) if defendants else "—"
+            elif isinstance(value, list):
+                if not value:
+                    lines.append(f"{alias}: отсутствуют")
+                else:
+                    lines.append(f"{alias}:")
+                    for i, item in enumerate(value, 1):
+                        if isinstance(item, dict):
+                            formatted_item = format_dict_item(item, aliases)
+                            lines.append(f"  {i}. {formatted_item}")
+                        else:
+                            formatted_value = format_value(item)
+                            lines.append(f"  {i}. {formatted_value}")
             
-            # Форматируем дату
-            formatted_date = format_date(date) if date != '—' else '—'
-            
-            lines.append(f"• {clean_text(case_num)}, {formatted_date}, {clean_text(court)}, Истцы: {plaintiffs_text}, Ответчики: {defendants_text}, Сумма: {format_money(amount)}")
-    else:
-        lines.append("\nДела не найдены")
+            else:
+                formatted_value = format_value(value)
+                lines.append(f"{alias}: {formatted_value}")
     
     return "\n".join(lines)
+
+
+def load_legal_aliases() -> Dict[str, str]:
+    """Алиасы для арбитражных дел"""
+    return {
+        'company': 'Компания',
+        'data': 'Данные арбитражных дел',
+        'meta': 'Метаданные',
+        # Добавить остальные поля по мере необходимости
+    }

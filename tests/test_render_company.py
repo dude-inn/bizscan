@@ -276,3 +276,4 @@ class TestRenderCompany:
         # Проверяем, что результат содержит только текстовые разделители
         assert "=" in result  # Разделители секций
         assert "•" in result  # Маркеры списков
+

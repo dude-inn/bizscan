@@ -3,14 +3,14 @@
 Сборщик отчёта
 """
 import asyncio
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from .ofdata_client import OFDataClient
-from .render_company import render_company
-from .render_finances import render_finances
+from .simple_company_renderer import render_company_simple
+from .simple_finances_renderer import render_finances_simple
 from .render_legal import render_legal
 from .render_enforce import render_enforce
 from .render_inspect import render_inspect
-from .render_contracts import render_contracts
+from .simple_contracts_renderer import render_contracts_simple
 from .render_entrepreneur import render_entrepreneur
 from core.logger import setup_logging, get_logger
 
@@ -78,12 +78,13 @@ class ReportBuilder:
                 log.info("Fetching company by OGRN", ogrn=query)
                 company_data = self.client.get_company(ogrn=query)
             
-        # Проверяем, что компания найдена
-        print(f"DEBUG: company_data = {company_data}")
-        print(f"DEBUG: company_data.get('data') = {company_data.get('data') if company_data else None}")
-        if not company_data or not company_data.get('data'):
-            log.warning("Company not found in API response", query=query, response=company_data)
-            raise ValueError("Компания не найдена")
+            # Проверяем, что компания найдена
+            log.debug("_fetch_data: checking company data", 
+                     has_company_data=bool(company_data),
+                     has_data_key=bool(company_data.get('data') if company_data else None))
+            if not company_data or not company_data.get('data'):
+                log.warning("Company not found in API response", query=query, response=company_data)
+                raise ValueError("Компания не найдена")
             
             log.info("Company data fetched successfully", company_keys=list(company_data.keys()) if company_data else None)
             data['company'] = company_data
@@ -181,41 +182,34 @@ class ReportBuilder:
         """Строит секции отчёта"""
         sections = []
         
-        # 1. ЗАГОЛОВОК
+        # 1. ОСНОВНОЕ
         if 'company' in data and data['company']:
-            company_name = data['company'].get('НаимПолн') or data['company'].get('НаимСокр', 'Неизвестная компания')
-            inn = data['company'].get('ИНН', '—')
-            ogrn = data['company'].get('ОГРН', '—')
-            sections.append(f"# {company_name}\nИНН: {inn} | ОГРН: {ogrn}")
-        
-        # 2. ОСНОВНОЕ
-        if 'company' in data and data['company']:
-            company_info = render_company(data['company'])
+            company_info = render_company_simple(data['company'])
             sections.append(company_info)
         
-        # 3. ФИНАНСОВАЯ ОТЧЁТНОСТЬ
+        # 2. ФИНАНСОВАЯ ОТЧЁТНОСТЬ
         if 'finances' in include_sections and data.get('finances'):
-            finances = render_finances(data['finances'])
+            finances = render_finances_simple(data['finances'])
             sections.append(finances)
         
-        # 4. АРБИТРАЖНЫЕ ДЕЛА
+        # 3. АРБИТРАЖНЫЕ ДЕЛА
         if 'legal-cases' in include_sections and data.get('legal_cases'):
             legal_cases = render_legal(data['legal_cases'])
             sections.append(legal_cases)
         
-        # 5. ИСПОЛНИТЕЛЬНЫЕ ПРОИЗВОДСТВА
+        # 4. ИСПОЛНИТЕЛЬНЫЕ ПРОИЗВОДСТВА
         if 'enforcements' in include_sections and data.get('enforcements'):
             enforcements = render_enforce(data['enforcements'])
             sections.append(enforcements)
         
-        # 6. ПРОВЕРКИ
+        # 5. ПРОВЕРКИ
         if 'inspections' in include_sections and data.get('inspections'):
             inspections = render_inspect(data['inspections'])
             sections.append(inspections)
         
-        # 7. ГОСЗАКУПКИ
+        # 6. ГОСЗАКУПКИ
         if 'contracts' in include_sections and data.get('contracts'):
-            contracts = render_contracts(data['contracts'])
+            contracts = render_contracts_simple(data['contracts'])
             sections.append(contracts)
         
         # 8. ИП (если есть)
@@ -223,30 +217,18 @@ class ReportBuilder:
             entrepreneur = render_entrepreneur(data['entrepreneur'])
             sections.append(entrepreneur)
         
-        return "\n\n".join(sections)
+        # Объединяем все секции
+        report_text = "\n\n".join(sections)
+        
+        # Добавляем секции ИСТОРИЯ КОМПАНИИ и РЕЗЮМЕ
+        report_text = self._add_openai_sections(report_text)
+        
+        return report_text
     
     def _add_openai_sections(self, report_text: str) -> str:
-        """Добавляет секции от OpenAI"""
-        try:
-            # Инициализируем OpenAI клиент если нужно
-            if not self.openai_client:
-                from services.providers.openai import OpenAIProvider
-                self.openai_client = OpenAIProvider()
-            
-            # Генерируем историю компании
-            history = self.openai_client.generate_company_history(report_text)
-            
-            # Генерируем резюме
-            summary = self.openai_client.generate_company_summary(report_text)
-            
-            # Добавляем к отчёту
-            full_report = report_text + "\n\n" + "ИСТОРИЯ КОМПАНИИ\n" + "=" * 50 + "\n" + history + "\n\n" + "РЕЗЮМЕ\n" + "=" * 50 + "\n" + summary
-            
-            return full_report
-            
-        except Exception as e:
-            log.warning("Could not generate OpenAI sections", error=str(e))
-            return report_text + "\n\n" + "ИСТОРИЯ КОМПАНИИ\n" + "=" * 50 + "\n" + "Данные недоступны\n\n" + "РЕЗЮМЕ\n" + "=" * 50 + "\n" + "Данные недоступны"
+        """Отключено: возвращаем исходный отчёт без секций OpenAI"""
+        log.info("_add_openai_sections: disabled — returning report without OpenAI sections")
+        return report_text
     
     def build_company_profile(self, query: str) -> Dict[str, Any]:
         """
@@ -286,6 +268,8 @@ class ReportBuilder:
         Returns:
             Готовый отчёт
         """
+        log.info("build_simple_report: starting", ident=ident)
+        from .formatters import format_money, format_date
         try:
             # 1. Получаем данные компании
             company_data = self.client.get_company(**ident)
@@ -305,38 +289,107 @@ class ReportBuilder:
                 if not company_data or 'data' not in company_data:
                     return "❌ Компания не найдена"
             
-            # 2. Заголовок
+            # 2. Получаем данные
             company_info = company_data.get('data', company_data)
+            
+            # 3. Загружаем дополнительные данные
+            log.info("build_simple_report: loading additional data", include=include)
+            
+            # Загружаем финансы
+            if 'finances' in include:
+                try:
+                    finances_data = self.client.get_finances(**ident)
+                    if finances_data:
+                        company_data['finances'] = finances_data
+                        log.info("build_simple_report: finances loaded")
+                except Exception as e:
+                    log.warning("Could not load finances", error=str(e))
+            
+            # Загружаем арбитражные дела
+            if 'legal-cases' in include:
+                try:
+                    legal_data = self.client.get_legal_cases(**ident)
+                    if legal_data:
+                        company_data['legal_cases'] = legal_data
+                        log.info("build_simple_report: legal cases loaded")
+                except Exception as e:
+                    log.warning("Could not load legal cases", error=str(e))
+            
+            # Загружаем исполнительные производства
+            if 'enforcements' in include:
+                try:
+                    enforce_data = self.client.get_enforcements(**ident)
+                    if enforce_data:
+                        company_data['enforcements'] = enforce_data
+                        log.info("build_simple_report: enforcements loaded")
+                except Exception as e:
+                    log.warning("Could not load enforcements", error=str(e))
+            
+            # Загружаем проверки
+            if 'inspections' in include:
+                try:
+                    inspect_data = self.client.get_inspections(**ident)
+                    if inspect_data:
+                        company_data['inspections'] = inspect_data
+                        log.info("build_simple_report: inspections loaded")
+                except Exception as e:
+                    log.warning("Could not load inspections", error=str(e))
+            
+            # Загружаем контракты
+            if 'contracts' in include:
+                try:
+                    # Загружаем контракты для разных законов и ролей
+                    contracts_data = {}
+                    
+                    # 44-ФЗ как заказчик
+                    try:
+                        contracts_44_customer = self.client.get_contracts(law='44', role='customer', **ident)
+                        if contracts_44_customer:
+                            contracts_data['44_customer'] = contracts_44_customer
+                    except Exception as e:
+                        log.warning("Could not load 44-FZ customer contracts", error=str(e))
+                    
+                    # 44-ФЗ как поставщик
+                    try:
+                        contracts_44_supplier = self.client.get_contracts(law='44', role='supplier', **ident)
+                        if contracts_44_supplier:
+                            contracts_data['44_supplier'] = contracts_44_supplier
+                    except Exception as e:
+                        log.warning("Could not load 44-FZ supplier contracts", error=str(e))
+                    
+                    # 223-ФЗ как заказчик
+                    try:
+                        contracts_223_customer = self.client.get_contracts(law='223', role='customer', **ident)
+                        if contracts_223_customer:
+                            contracts_data['223_customer'] = contracts_223_customer
+                    except Exception as e:
+                        log.warning("Could not load 223-FZ customer contracts", error=str(e))
+                    
+                    # 223-ФЗ как поставщик
+                    try:
+                        contracts_223_supplier = self.client.get_contracts(law='223', role='supplier', **ident)
+                        if contracts_223_supplier:
+                            contracts_data['223_supplier'] = contracts_223_supplier
+                    except Exception as e:
+                        log.warning("Could not load 223-FZ supplier contracts", error=str(e))
+                    
+                    if contracts_data:
+                        company_data['contracts'] = contracts_data
+                        log.info("build_simple_report: contracts loaded", contracts_keys=list(contracts_data.keys()))
+                except Exception as e:
+                    log.warning("Could not load contracts", error=str(e))
             
             # Для налоговых данных нужно искать в правильном месте
             taxes_data = company_info.get('Налоги', {})
-            name = company_info.get('НаимПолн') or company_info.get('НаимСокр', 'Неизвестная компания')
-            inn = company_info.get('ИНН', '—')
-            ogrn = company_info.get('ОГРН', '—')
-            reg_date = company_info.get('ДатаРег', '—')
-            
-            if reg_date != '—':
-                from .formatters import format_date
-                reg_date = format_date(reg_date)
-            
-            header_lines = [name]
-            if inn != '—' or ogrn != '—' or reg_date != '—':
-                header_parts = []
-                if inn != '—':
-                    header_parts.append(f"ИНН {inn}")
-                if ogrn != '—':
-                    header_parts.append(f"ОГРН {ogrn}")
-                if reg_date != '—':
-                    header_parts.append(f"Дата регистрации {reg_date}")
-                header_lines.append(" • ".join(header_parts))
             
             # 3. Собираем секции
             sections = []
             
             # ОСНОВНОЕ
             if 'company' in include:
-                company_info = render_company(data)
-                sections.append(company_info)
+                from .simple_company_renderer import render_company_simple
+                company_section = render_company_simple(company_info)
+                sections.append(company_section)
             
             # НАЛОГИ
             if 'taxes' in include:
@@ -356,8 +409,7 @@ class ReportBuilder:
                     
                     # Всего уплачено
                     total_paid = taxes_data.get('СумУпл', 0)
-                    if total_paid > 0:
-                        from .formatters import format_money
+                    if isinstance(total_paid, (int, float)) and total_paid > 0:
                         tax_lines.append(f"Всего уплачено: {format_money(total_paid)}")
                     
                     # Топ-5 уплаченных налогов
@@ -373,7 +425,7 @@ class ReportBuilder:
                     # Недоимка
                     arrears = taxes_data.get('СумНедоим', 0)
                     arrears_date = taxes_data.get('НедоимДата', '—')
-                    if arrears > 0:
+                    if isinstance(arrears, (int, float)) and arrears > 0:
                         formatted_date = format_date(arrears_date) if arrears_date != '—' else '—'
                         tax_lines.append(f"Недоимка: {format_money(arrears)} (на {formatted_date})")
                     
@@ -384,13 +436,13 @@ class ReportBuilder:
             # ФИНАНСОВАЯ ОТЧЁТНОСТЬ
             if 'finances' in include:
                 try:
-                    # Сначала проверяем, есть ли финансы в data['data'] (как в примере пользователя)
-                    if 'data' in data and any(key.isdigit() and len(key) == 4 for key in data['data'].keys()):
-                        finances = render_finances(data)
+                    # Сначала проверяем, есть ли финансы в company_data (как в примере пользователя)
+                    if 'data' in company_data and any(key.isdigit() and len(key) == 4 for key in company_data['data'].keys()):
+                        finances = render_finances_simple(company_data)
                         sections.append(finances)
-                    # Затем проверяем, есть ли финансы в data['finances']
-                    elif data.get('finances') and 'data' in data['finances']:
-                        finances = render_finances(data['finances'])
+                    # Затем проверяем, есть ли финансы в company_data['finances']
+                    elif company_data.get('finances') and 'data' in company_data['finances']:
+                        finances = render_finances_simple(company_data['finances'])
                         sections.append(finances)
                     else:
                         sections.append("ФИНАНСОВАЯ ОТЧЁТНОСТЬ\n" + "=" * 50 + "\nДанные недоступны")
@@ -401,8 +453,8 @@ class ReportBuilder:
             # АРБИТРАЖНЫЕ ДЕЛА
             if 'legal-cases' in include:
                 try:
-                    if data.get('legal_cases') and 'data' in data['legal_cases']:
-                        legal = render_legal(data['legal_cases'])
+                    if company_data.get('legal_cases') and 'data' in company_data['legal_cases']:
+                        legal = render_legal(company_data['legal_cases'])
                         sections.append(legal)
                     else:
                         sections.append("АРБИТРАЖНЫЕ ДЕЛА\n" + "=" * 50 + "\nДанные недоступны")
@@ -413,8 +465,8 @@ class ReportBuilder:
             # ИСПОЛНИТЕЛЬНЫЕ ПРОИЗВОДСТВА
             if 'enforcements' in include:
                 try:
-                    if data.get('enforcements') and 'data' in data['enforcements']:
-                        enforce = render_enforce(data['enforcements'])
+                    if company_data.get('enforcements') and 'data' in company_data['enforcements']:
+                        enforce = render_enforce(company_data['enforcements'])
                         sections.append(enforce)
                     else:
                         sections.append("ИСПОЛНИТЕЛЬНЫЕ ПРОИЗВОДСТВА\n" + "=" * 50 + "\nДанные недоступны")
@@ -425,20 +477,20 @@ class ReportBuilder:
             # ПРОВЕРКИ
             if 'inspections' in include:
                 try:
-                    if data.get('inspections') and 'data' in data['inspections']:
-                        inspect = render_inspect(data['inspections'])
+                    if company_data.get('inspections') and 'data' in company_data['inspections']:
+                        inspect = render_inspect(company_data['inspections'])
                         sections.append(inspect)
                     else:
                         sections.append("ПРОВЕРКИ\n" + "=" * 50 + "\nДанные недоступны")
                 except Exception as e:
-                    log.warning("Could not fetch inspections", error=str(e))
-                    sections.append("ПРОВЕРКИ\n" + "=" * 50 + "\nДанные недоступны")
+                    log.warning("Could not render inspections", error=str(e))
+                    sections.append("ПРОВЕРКИ\n" + "=" * 50 + f"\nОшибка обработки данных: {str(e)}")
             
             # ГОСЗАКУПКИ
             if 'contracts' in include:
                 try:
-                    if data.get('contracts'):
-                        contracts = render_contracts(data['contracts'])
+                    if company_data.get('contracts'):
+                        contracts = render_contracts_simple(company_data['contracts'])
                         sections.append(contracts)
                     else:
                         sections.append("ГОСЗАКУПКИ\n" + "=" * 50 + "\nДанные недоступны")
@@ -447,11 +499,19 @@ class ReportBuilder:
                     sections.append("ГОСЗАКУПКИ\n" + "=" * 50 + "\nДанные недоступны")
             
             # 4. Собираем полный текст
-            full_text = "\n\n".join(["\n".join(header_lines)] + sections)
+            full_text = "\n\n".join(sections)
             
-            # 5. Добавляем OpenAI секции
+            # 5. Добавляем OpenAI секции (только основные данные)
             try:
-                history, bullets = self.summarize_history_and_bullets(full_text)
+                # Извлекаем только основные данные компании для OpenAI
+                company_name = company_info.get('НаимПолн', company_info.get('НаимСокр', 'Не указано'))
+                inn = company_info.get('ИНН', 'Не указан')
+                address = company_info.get('ЮрАдрес', company_info.get('Адрес', 'Не указан'))
+                
+                # Создаем краткий текст только с основными данными
+                basic_data = f"НАЗВАНИЕ: {company_name}\nИНН: {inn}\nАДРЕС: {address}"
+                
+                history, bullets = self.summarize_history_and_bullets(basic_data)
                 # Добавляем секции к отчёту
                 full_text += f"\n\nИСТОРИЯ КОМПАНИИ\n{'=' * 50}\n{history}\n\nРЕЗЮМЕ\n{'=' * 50}\n{bullets}"
             except Exception as e:
@@ -464,96 +524,45 @@ class ReportBuilder:
             log.error("ReportBuilder: error building simple report", error=str(e), ident=ident)
             return f"❌ Ошибка при формировании отчёта: {str(e)}"
     
-        def summarize_history_and_bullets(self, full_text: str) -> tuple:
-            """
-            Генерирует историю компании и резюме с помощью OpenAI
+    def summarize_history_and_bullets(self, full_text: str) -> Tuple[str, str]:
+        """
+        Генерирует историю компании и резюме с помощью OpenAI
+        
+        Args:
+            full_text: Полный текст отчёта
             
-            Args:
-                full_text: Полный текст отчёта
-                
-            Returns:
-                Кортеж (история, резюме)
-            """
-            try:
-                # Простая генерация без OpenAI (пока)
-                # Извлекаем ключевые данные из отчёта
-                lines = full_text.split('\n')
-                
-                # Ищем название компании
-                company_name = "Компания"
-                for line in lines[:10]:  # В первых 10 строках
-                    if line and not line.startswith('ИНН') and not line.startswith('ОГРН') and not line.startswith('='):
-                        if len(line) > 5:
-                            company_name = line.strip()
-                            break
-                
-                # Ищем дату регистрации
-                reg_date = "неизвестно"
-                for line in lines:
-                    if "Дата регистрации:" in line:
-                        reg_date = line.split(":")[-1].strip()
-                        break
-                
-                # Ищем регион
-                region = "неизвестно"
-                for line in lines:
-                    if "Регион:" in line:
-                        region = line.split(":")[-1].strip()
-                        break
-                
-                # Генерируем простую историю
-                history = f"{company_name} была зарегистрирована {reg_date} в {region}. "
-                
-                # Ищем арбитражные дела
-                for line in lines:
-                    if "Всего дел:" in line:
-                        cases_count = line.split(":")[-1].strip()
-                        history += f"Компания участвовала в {cases_count} арбитражных делах. "
-                        break
-                
-                # Ищем проверки
-                for line in lines:
-                    if "Всего проверок:" in line:
-                        inspections_count = line.split(":")[-1].strip()
-                        history += f"Проведено {inspections_count} проверок. "
-                        break
-                
-                history += "Компания ведет активную хозяйственную деятельность."
-                
-                # Генерируем резюме
-                bullets = [
-                    f"• Название: {company_name}",
-                    f"• Дата регистрации: {reg_date}",
-                    f"• Регион: {region}",
-                ]
-                
-                # Добавляем данные о делах
-                for line in lines:
-                    if "Всего дел:" in line:
-                        cases_count = line.split(":")[-1].strip()
-                        bullets.append(f"• Арбитражные дела: {cases_count}")
-                        break
-                
-                # Добавляем данные о проверках
-                for line in lines:
-                    if "Всего проверок:" in line:
-                        inspections_count = line.split(":")[-1].strip()
-                        bullets.append(f"• Проверки: {inspections_count}")
-                        break
-                
-                # Добавляем контакты
-                for line in lines:
-                    if "Телефоны:" in line:
-                        phones = line.split(":")[-1].strip()
-                        bullets.append(f"• Контакты: {phones[:50]}...")
-                        break
-                
-                bullets.append("• Статус: Действующая организация")
-                
-                summary = "\n".join(bullets)
-                
+        Returns:
+            Кортеж (история, резюме)
+        """
+        try:
+            # Используем OpenAI для генерации
+            from services.providers.openai_provider import OpenAIProvider
+            
+            openai_provider = OpenAIProvider()
+            
+            # Генерируем историю и резюме асинхронно
+            import asyncio
+            
+            async def generate_sections():
+                history = await openai_provider.generate_company_history(full_text)
+                summary = await openai_provider.generate_company_summary(full_text)
                 return history, summary
+            
+            # Запускаем асинхронную генерацию
+            try:
+                # Проверяем, есть ли уже запущенный event loop
+                loop = asyncio.get_running_loop()
+                # Если есть, создаем задачу
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, generate_sections())
+                    history, summary = future.result()
+            except RuntimeError:
+                # Если нет запущенного loop, создаем новый
+                history, summary = asyncio.run(generate_sections())
+            
+            return history, summary
                 
-            except Exception as e:
-                log.warning("Could not generate sections", error=str(e))
-                return "Данные недоступны", "Данные недоступны"
+        except Exception as e:
+            log.warning("Could not generate sections with OpenAI", error=str(e))
+            return "Данные недоступны", "Данные недоступны"

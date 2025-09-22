@@ -26,102 +26,40 @@ def _log_openai_status():
 _log_openai_status()
 
 SYSTEM_PROMPT = """\
-Ты — аналитик. Составь краткий блок для презентации Gamma.app ТОЛЬКО из переданных данных карточки компании.
-Запрещено придумывать факты. Используй только то, что есть в карточке и официальных источниках.
-Формат:
-— Абзац (2–4 строки): деятельность (по ОКВЭД), местоположение (адрес/регион), форма (ОПФ/статус).
-— 3–6 маркеров: капитал и собственники; налоговый режим; численность работников; контакты; правопреемство; негативные списки (если есть).
-— Строка «Источники»: список официальных ссылок (макс 4).
-Стиль: нейтральный, лаконичный.
+Ты — аналитик. Проведи поиск в интернете и найди информацию по компании.
+Найди и предоставь:
+- Общие сведения о компании
+- История развития
+- Значимые факты и достижения
+- Текущая деятельность
+
+Формат ответа:
+— Краткое описание деятельности и местоположения
+— 3-5 ключевых фактов о компании
+— Источники информации
+
+Стиль: нейтральный, информативный.
 """
 
 def build_user_prompt(company: Dict[str, Any], official_links: List[str]) -> str:
+    """Создает краткий промпт с основными данными компании для поиска в интернете"""
     name = company.get("name_full") or company.get("name") or ""
     inn = company.get("inn") or ""
-    ogrn = company.get("ogrn") or ""
-    okved = company.get("okved") or ""
-    opf = company.get("opf") or company.get("org_form") or ""
-    status_code = company.get("status_code") or company.get("status") or ""
-    status_text = company.get("status_text") or ""
-    reg_date = company.get("registration_date") or company.get("date_reg") or ""
     address = company.get("address") or ""
-    head_name = company.get("manager_name") or company.get("head_name") or ""
-    head_post = company.get("manager_post") or company.get("head_post") or ""
-    charter_capital = company.get("charter_capital") or company.get("ustavnyi_kapital")
-    owners = company.get("owners") or []
-    tax_mode = company.get("tax_mode") or company.get("osob_rezhim")
-    workers_count = company.get("workers_count") or company.get("СЧР")
-    contacts = company.get("contacts") or {}
-    emails = []
-    phones = []
-    if isinstance(contacts, dict):
-        emails = contacts.get("emails") or contacts.get("email") or []
-        phones = contacts.get("phones") or contacts.get("tel") or []
-        if isinstance(emails, str):
-            emails = [emails]
-        if isinstance(phones, str):
-            phones = [phones]
-    predecessors = company.get("predecessors") or company.get("правопредш") or []
-    successors = company.get("successors") or company.get("правопреем") or []
-    negative_lists = company.get("negative_lists") or company.get("негативные_списки") or []
-    finances = company.get("finances_digest") or company.get("finances")
+    
+    # Создаем краткий промпт только с основными данными
+    prompt = f"""Проведи поиск в интернете и найди информацию по компании:
+- Название: {name}
+- Адрес: {address}  
+- ИНН: {inn}
 
-    header = f"{name} (ИНН {inn}, ОГРН {ogrn})"
-    lines = [header]
-    if okved:
-        lines.append(f"ОКВЭД: {okved}")
-    if opf or status_code or status_text:
-        st = status_text or status_code
-        lines.append(f"ОПФ/статус: {opf or '-'} / {st or '-'}")
-    if reg_date:
-        lines.append(f"Дата регистрации: {reg_date}")
-    if address:
-        lines.append(f"Адрес: {address}")
-    if head_name or head_post:
-        lines.append(f"Руководитель: {(head_name or '-') + (' — ' + head_post if head_post else '')}")
-    if charter_capital is not None:
-        lines.append(f"Уставный капитал: {charter_capital}")
-    if owners:
-        try:
-            owner_names = ", ".join([o.get("name") or o.get("НаимПолн") or "?" for o in owners if isinstance(o, dict)])
-        except Exception:
-            owner_names = ", ".join(map(str, owners))
-        if owner_names:
-            lines.append(f"Собственники: {owner_names}")
-    if tax_mode:
-        lines.append(f"Налоговый режим: {tax_mode}")
-    if workers_count:
-        lines.append(f"СЧР: {workers_count}")
-    if emails:
-        lines.append(f"Email: {', '.join(emails[:3])}")
-    if phones:
-        lines.append(f"Тел: {', '.join(phones[:3])}")
-    if predecessors:
-        lines.append("Правопредшественники: да")
-    if successors:
-        lines.append("Правопреемники: да")
-    if negative_lists:
-        lines.append("Негативные списки: да")
-    if finances and isinstance(finances, dict):
-        # ожидаемые поля: last_year, revenue, profit, assets, equity (если заранее подготовлено)
-        parts = []
-        for k in ("last_year", "revenue", "profit", "assets", "equity"):
-            if finances.get(k) is not None:
-                parts.append(f"{k}:{finances.get(k)}")
-        if parts:
-            lines.append("Финансы (дайджест): " + "; ".join(parts))
-
-    lines.append("")
-    lines.append("### Официальные ссылки")
-    if official_links:
-        for url in official_links[:4]:
-            lines.append(f"- {url}")
-    else:
-        lines.append("- ЕГРЮЛ (ФНС)")
-        lines.append("- ГИР БО (ФНС)")
-        lines.append("- КАД")
-
-    return "\n".join(lines)
+Найди и предоставь:
+- Общие сведения о компании
+- История развития
+- Значимые факты и достижения
+- Текущая деятельность"""
+    
+    return prompt
 
 def generate_gamma_section(company: Dict[str, Any], official_links: List[str], *, model: Optional[str] = None) -> str:
     log.info(f"🤖 Generating Gamma section for: {company.get('name_full', 'Unknown')}")

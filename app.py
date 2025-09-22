@@ -37,7 +37,7 @@ async def main():
         settings = load_settings()
         log.info("Settings loaded successfully", 
                 bot_token_present=bool(settings.BOT_TOKEN),
-                dadata_key_present=bool(settings.DADATA_API_KEY),
+                ofdata_key_present=bool(settings.OFDATA_KEY),
                 sqlite_path=settings.SQLITE_PATH)
     except Exception as e:
         log.error("Failed to load settings", error=str(e))
@@ -117,4 +117,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Bot error: {e}")
         import traceback
-        traceback.print_exc()
+        traceback.print_excпонgjyz

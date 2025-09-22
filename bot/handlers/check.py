@@ -39,6 +39,7 @@ async def check_command(msg: Message, state: FSMContext):
     
     # Extract query from command
     query = msg.text.replace("/check", "").strip()
+    log.info("check_command: extracted query", query=query, user_id=msg.from_user.id)
     
     if not query:
         await msg.answer(
@@ -54,10 +55,21 @@ async def check_command(msg: Message, state: FSMContext):
     
     # Check if query is digits only (INN/OGRN)
     if _is_digits_only(query):
-        if _is_inn(query) or _is_ogrn(query):
+        is_inn = _is_inn(query)
+        is_ogrn = _is_ogrn(query)
+        log.info("check_command: parsed query type", 
+                is_digits_only=True, 
+                is_inn=is_inn, 
+                is_ogrn=is_ogrn, 
+                query=query, 
+                user_id=msg.from_user.id)
+        
+        if is_inn or is_ogrn:
             # Valid INN/OGRN - proceed with report
+            log.info("check_command: valid INN/OGRN detected", query=query, user_id=msg.from_user.id)
             await _process_valid_query(msg, state, query)
         else:
+            log.warning("check_command: invalid INN/OGRN format", query=query, user_id=msg.from_user.id)
             await msg.answer(
                 "❌ **Некорректный ИНН/ОГРН**\n\n"
                 "• ИНН: 10 или 12 цифр\n"
@@ -66,6 +78,7 @@ async def check_command(msg: Message, state: FSMContext):
             )
     else:
         # Text query - check if name search is available
+        log.info("check_command: text query detected", query=query, user_id=msg.from_user.id)
         try:
             from bot.handlers.settings import get_user_data_source
             user_source = get_user_data_source(msg.from_user.id)
@@ -73,10 +86,14 @@ async def check_command(msg: Message, state: FSMContext):
             from settings import DATASOURCE
             user_source = DATASOURCE
         
+        log.info("check_command: determined data source", user_source=user_source, user_id=msg.from_user.id)
+        
         if user_source == "ofdata":
             # Try name search
+            log.info("check_command: proceeding with name search", query=query, user_id=msg.from_user.id)
             await _process_name_search(msg, state, query)
         else:
+            log.info("check_command: name search not available", user_source=user_source, user_id=msg.from_user.id)
             await msg.answer(
                 "❌ **Поиск по названию недоступен**\n\n"
                 "Текущий источник: **Источник 1**\n"
@@ -94,10 +111,16 @@ async def _process_valid_query(msg: Message, state: FSMContext, query: str):
     
     # Show loading message
     status_msg = await msg.answer("⏳ Собираю данные о компании...")
+    log.info("_process_valid_query: loading message sent", user_id=msg.from_user.id)
     
     try:
         # Get company report
+        log.info("_process_valid_query: calling fetch_company_report_markdown", query=query, user_id=msg.from_user.id)
         response = await fetch_company_report_markdown(query)
+        log.info("_process_valid_query: received response from aggregator", 
+                response_length=len(response) if response else 0,
+                response_preview=response[:200] if response else None,
+                user_id=msg.from_user.id)
         
         if not response or response.startswith("Укажите корректный") or response.startswith("Ошибка"):
             await status_msg.edit_text("❌ Компания не найдена или некорректный ИНН/ОГРН")

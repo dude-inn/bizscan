@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Обработчики для работы с компаниями (новая архитектура)
+Обработчики для работы с компаниями (исправленная версия)
 """
 import json
 import tempfile
@@ -14,52 +14,31 @@ from aiogram.types import FSInputFile
 from bot.states import SearchState, ReportState
 from bot.keyboards.main import choose_report_kb, report_menu_kb
 from services.aggregator import fetch_company_report_markdown, fetch_company_profile
-from services.enrichment.official_sources import build_official_links
-from services.enrichment.openai_gamma_enricher import generate_gamma_section
-from core.logger import setup_logging
-from services.providers.ofdata import OFDataClientError, OFDataServerTemporaryError
-from settings import (
-    REQUEST_TIMEOUT, MAX_RETRIES
-)
+from core.logger import setup_logging, get_logger
 
-router = Router(name="company")
-log = setup_logging()
+# Настройка логирования
+setup_logging()
+log = get_logger(__name__)
 
-
-@router.callback_query(F.data == "back_results")
-async def back_results(cb: CallbackQuery, state: FSMContext):
-    await cb.message.answer("Возвращаемся к результатам…")
-    await cb.answer()
-    await __import__("bot.handlers.search", fromlist=['']).show_page(cb.message, state)
-
-
-@router.callback_query(F.data == "back_main")
-async def back_main(cb: CallbackQuery, state: FSMContext):
-    """Возврат в главное меню"""
-    log.info("back_main: handler called", callback_data=cb.data, user_id=cb.from_user.id)
-    
-    # Очищаем состояние
-    await state.clear()
-    
-    # Отправляем приветственное сообщение с главным меню
-    await cb.message.answer(
-        "🏢 Добро пожаловать в BizScan Bot!\n\n"
-        "Выберите действие:",
-        reply_markup=report_menu_kb()
-    )
-    
-    await cb.answer()
-
+# Создаём роутер
+router = Router(name="company_fixed")
 
 @router.callback_query(F.data == "report_free")
 async def free_report(cb: CallbackQuery, state: FSMContext):
     """Генерация бесплатного отчёта"""
+    print("DEBUG: free_report handler called")  # Тестовый вывод
+    print(f"DEBUG: callback_data={cb.data}, user_id={cb.from_user.id}")  # Дополнительная диагностика
     log.info("free_report: handler called", callback_data=cb.data, user_id=cb.from_user.id)
     
-    await cb.answer()
+    # Отвечаем на callback query сразу, чтобы избежать timeout
+    try:
+        await cb.answer()
+    except Exception as e:
+        log.warning("Could not answer callback query", error=str(e))
     
     # Показываем индикатор загрузки
     status_msg = await cb.message.answer("⏳ Собираю данные о компании...")
+    file_sent = False
     
     try:
         # Получаем данные из состояния
@@ -73,12 +52,16 @@ async def free_report(cb: CallbackQuery, state: FSMContext):
             await status_msg.edit_text("❌ Не указан поисковый запрос")
             return
         
-        # Получаем отчёт компании
-        log.info("Fetching company report", query=query, user_id=cb.from_user.id)
+        # Получаем отчёт компании через агрегатор
+        log.info("Fetching company report using aggregator", query=query, user_id=cb.from_user.id)
         response = await fetch_company_report_markdown(query)
+        log.info("Report generation completed", 
+                response_length=len(response) if response else 0, 
+                response_preview=response[:200] if response else None,
+                user_id=cb.from_user.id)
         
-        if not response or response.startswith("Укажите корректный"):
-            log.warning("Invalid query or company not found", query=query, user_id=cb.from_user.id)
+        if not response or response.startswith("❌"):
+            log.warning("Invalid query or company not found", query=query, response=response[:200] if response else None, user_id=cb.from_user.id)
             await status_msg.edit_text("❌ Компания не найдена или некорректный ИНН/ОГРН")
             return
         
@@ -87,153 +70,68 @@ async def free_report(cb: CallbackQuery, state: FSMContext):
                 response_length=len(response),
                 user_id=cb.from_user.id)
         
-        # Отчет готов, не выводим его в сообщение
-        log.info("Report generated successfully", response_length=len(response), user_id=cb.from_user.id)
-        
-        # Добавляем кнопку для скачивания JSON
-        log.info("Adding keyboard buttons", user_id=cb.from_user.id)
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📝 Скачать TXT", callback_data="download_txt")],
-            [InlineKeyboardButton(text="🔍 Новый поиск", callback_data="search_inn")],
-            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_main")]
-        ])
-        
-        await status_msg.edit_text(
-            "✅ Отчет готов! Нажмите кнопку ниже для скачивания файла.",
-            reply_markup=keyboard,
-            disable_web_page_preview=True,
-        )
-        log.info("Free report completed successfully", user_id=cb.from_user.id)
-        
-        # Сохраняем данные в состоянии для скачивания TXT
-        log.info("free_report: saving company_text to state", 
-                text_length=len(response),
-                text_preview=response[:200] if response else None,
-                user_id=cb.from_user.id)
-        await state.update_data(company_text=response)
-        log.info("free_report: company_text saved to state successfully", user_id=cb.from_user.id)
+        # Генерируем DOCX вместо TXT
+        log.info("Generating DOCX report", user_id=cb.from_user.id)
+        from docx import Document
+        from docx.shared import Pt
+        from docx.oxml.ns import qn
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
 
-        # Вывод Gamma-блока отключён по требованиям UX
-        
-    except (OFDataClientError) as e:
-        if "404" in str(e) or "409" in str(e):
-            await status_msg.edit_text("❌ Контрагент не найден по указанным данным.")
-        elif "403" in str(e) or "401" in str(e):
-            await status_msg.edit_text("❌ Доступ к источнику ограничен или неверный ключ.")
-        elif "404" in str(e) and "Страница не найдена" in str(e):
-            await status_msg.edit_text("❌ Источник данных недоступен. Проверьте настройки API ключа.")
-        else:
-            await status_msg.edit_text(f"❌ Ошибка получения данных: {str(e)}")
-    except (OFDataServerTemporaryError) as e:
-        await status_msg.edit_text("❌ Источник временно недоступен, повторите позже.")
-    except Exception as e:
-        log.error("Free report failed", 
-                 error=str(e), 
-                 user_id=cb.from_user.id,
-                 query=query if 'query' in locals() else None)
-        await status_msg.edit_text(f"❌ Ошибка при получении данных: {str(e)}", parse_mode=None)
+        doc = Document()
+        # Базовый стиль
+        style = doc.styles['Normal']
+        style.font.name = 'Calibri'
+        style._element.rPr.rFonts.set(qn('w:eastAsia'), 'Calibri')
+        style.font.size = Pt(11)
 
+        # Разбиваем отчёт по строкам и добавляем абзацы
+        for line in response.splitlines():
+            if line.strip() == '':
+                doc.add_paragraph('')
+                continue
+            # Заголовки секций (====) делаем жирными
+            if set(line.strip()) == {'='} and len(line.strip()) >= 10:
+                # Это разделитель — пропускаем, т.к. предыдущая строка уже заголовок
+                continue
+            p = doc.add_paragraph()
+            run = p.add_run(line)
+            # Если предыдущая строка была заглавными буквами/заголовком
+            if line.isupper() and len(line) < 60:
+                run.bold = True
 
-@router.callback_query(F.data == "download_txt")
-async def download_txt(cb: CallbackQuery, state: FSMContext):
-    """Скачивание TXT отчёта"""
-    log.info("download_txt: handler called", callback_data=cb.data, user_id=cb.from_user.id)
-    
-    await cb.answer()
-    
-    try:
-        log.info("download_txt: getting state data", user_id=cb.from_user.id)
-        data = await state.get_data()
-        log.info("download_txt: state data retrieved", 
-                keys=list(data.keys()) if data else [], 
-                user_id=cb.from_user.id)
+        # Сохраняем во временный файл
+        with tempfile.NamedTemporaryFile(suffix='.docx', delete=False) as tmp:
+            doc.save(tmp.name)
+            temp_path = tmp.name
+        log.info("DOCX report saved", temp_path=temp_path, user_id=cb.from_user.id)
         
-        company_text = data.get("company_text")
-        log.info("download_txt: company_text check", 
-                has_company_text=bool(company_text),
-                text_length=len(company_text) if company_text else 0,
-                text_preview=company_text[:100] if company_text else None,
-                user_id=cb.from_user.id)
+        # Отправляем файл пользователю
+        log.info("Sending report file to user", user_id=cb.from_user.id)
+        with open(temp_path, 'rb') as file:
+            document = BufferedInputFile(file.read(), filename="company_report.docx")
+            
+            await status_msg.edit_text("✅ Отчёт готов!")
+            await cb.message.answer_document(
+                document,
+                caption="📊 Отчёт о компании (DOCX)\n\nФайл содержит полную информацию о компании, включая финансовую отчётность, арбитражные дела, проверки и госзакупки."
+            )
+            file_sent = True
+        log.info("Report file sent successfully", user_id=cb.from_user.id)
         
-        if not company_text:
-            log.warning("download_txt: no company_text in state", user_id=cb.from_user.id)
-            await cb.message.answer("❌ Данные не найдены. Выполните поиск заново.")
-            return
-        
-        # Извлекаем название компании из текста отчета
-        log.info("download_txt: extracting company name from text", user_id=cb.from_user.id)
-        lines = company_text.split('\n')
-        company_name = "company"
-        for line in lines:
-            # Ищем строку с названием компании (обычно это первая строка после "🧾 **Реквизиты**")
-            if line and not line.startswith('🧾') and not line.startswith('ИНН') and not line.startswith('📅') and not line.startswith('**Статус**'):
-                if len(line) > 5:  # Игнорируем короткие строки
-                    company_name = line.strip()
-                    break
-        
-        log.info("download_txt: extracted company name", 
-                company_name=company_name, 
-                user_id=cb.from_user.id)
-        
-        safe_name = "".join(ch for ch in company_name if ch.isalnum() or ch in (" ", "_", "-"))[:64]
-        from datetime import datetime
-        today = datetime.now().strftime("%Y-%m-%d")
-        filename = f"{safe_name}_{today}.txt"
-        
-        log.info("download_txt: creating temporary file", 
-                filename=filename,
-                text_length=len(company_text),
-                user_id=cb.from_user.id)
-        
-        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as tmp:
-            tmp.write(company_text)
-            tmp_path = tmp.name
-        
-        log.info("download_txt: temporary file created", 
-                tmp_path=tmp_path,
-                user_id=cb.from_user.id)
-        
-        log.info("download_txt: sending document to user", 
-                filename=filename,
-                user_id=cb.from_user.id)
-        
-        await cb.message.answer_document(
-            FSInputFile(tmp_path, filename=filename),
-            caption="📝 TXT отчёт о компании"
-        )
-        
-        log.info("download_txt: document sent successfully", user_id=cb.from_user.id)
-        
+        # Удаляем временный файл
         import os
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
+        os.unlink(temp_path)
+        log.info("Temporary file deleted", temp_path=temp_path, user_id=cb.from_user.id)
+        
+        # Переходим в состояние выбора типа отчёта
+        await state.set_state(ReportState.choose_report)
+        await cb.message.answer(
+            "📊 Отчёт сформирован! Выберите действие:",
+            reply_markup=choose_report_kb()
+        )
         
     except Exception as e:
-        log.exception("download_txt: failed", exc_info=e)
-        await cb.message.answer(f"❌ Ошибка при создании TXT: {str(e)}")
-
-
-@router.callback_query(F.data == "report_paid")
-async def paid_report(cb: CallbackQuery, state: FSMContext):
-    """Платный отчёт (пока не реализован)"""
-    log.info("paid_report: handler called", callback_data=cb.data, user_id=cb.from_user.id)
-    
-    await cb.answer()
-    await cb.message.answer(
-        "💰 Платные отчёты пока не реализованы.\n"
-        "Используйте бесплатный отчёт для получения базовой информации."
-    )
-
-
-@router.callback_query(F.data == "report_txt")
-async def report_txt(cb: CallbackQuery, state: FSMContext):
-    """Текстовый дамп (устаревший функционал)"""
-    log.info("report_txt: handler called", callback_data=cb.data, user_id=cb.from_user.id)
-    
-    await cb.answer()
-    await cb.message.answer(
-        "📝 Текстовые дампы заменены на структурированные данные.\n"
-        "Используйте бесплатный отчёт для получения информации о компании."
-    )
+        log.error("Error in free_report", error=str(e), error_type=type(e).__name__, user_id=cb.from_user.id)
+        # Если файл уже отправлен, не затираем успешный статус ошибкой
+        if not file_sent:
+            await status_msg.edit_text("❌ Произошла ошибка при формировании отчёта")

@@ -19,6 +19,9 @@ tenacity>=8.2.0
 # AI and enrichment
 openai>=1.0.0
 
+# Document generation
+python-docx>=1.1.0
+
 # XML processing for SOAP
 lxml>=4.9.0
 

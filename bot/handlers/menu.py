@@ -12,9 +12,23 @@ router = Router(name="menu")
 async def back_main(cb: CallbackQuery, state: FSMContext):
     """Возврат в главное меню из любого места"""
     try:
-        await cb.message.edit_text("Главное меню:", reply_markup=main_menu_kb())
+        await cb.message.edit_text(
+            "👋 Привет!\n"
+            "Я соберу для тебя 📊 надёжный бизнес-профиль компании прямо из госисточников РФ.\n"
+            "👉 Проверка контрагентов, 📈 финансы, ⚖️ судебные дела — всё в одном месте!\n"
+            "Что будем искать? 🔎",
+            reply_markup=main_menu_kb(),
+            disable_web_page_preview=True,
+        )
     except Exception:
-        await cb.message.answer("Главное меню:", reply_markup=main_menu_kb())
+        await cb.message.answer(
+            "👋 Привет!\n"
+            "Я соберу для тебя 📊 надёжный бизнес-профиль компании прямо из госисточников РФ.\n"
+            "👉 Проверка контрагентов, 📈 финансы, ⚖️ судебные дела — всё в одном месте!\n"
+            "Что будем искать? 🔎",
+            reply_markup=main_menu_kb(),
+            disable_web_page_preview=True,
+        )
     await state.set_state(MenuState.MAIN)
     await cb.answer()
 
@@ -22,9 +36,9 @@ async def back_main(cb: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "menu_report")
 async def menu_report(cb: CallbackQuery, state: FSMContext):
     try:
-        await cb.message.edit_text("Выберите способ поиска:", reply_markup=report_menu_kb())
+        await cb.message.edit_text("Поиск нужной компании", reply_markup=report_menu_kb())
     except Exception:
-        await cb.message.answer("Выберите способ поиска:", reply_markup=report_menu_kb())
+        await cb.message.answer("Поиск нужной компании", reply_markup=report_menu_kb())
     await cb.answer()
     await state.set_state(MenuState.REPORT_MENU)
 

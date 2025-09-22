@@ -14,9 +14,9 @@ class Settings:
     # Telegram
     BOT_TOKEN: str
     
-    # DaData
-    DADATA_API_KEY: str
-    DADATA_SECRET_KEY: Optional[str]
+    # DaData (REMOVED - using OFData only)
+    # DADATA_API_KEY: str
+    # DADATA_SECRET_KEY: Optional[str]
     
     # OFData
     OFDATA_KEY: str
@@ -91,9 +91,9 @@ def load_settings() -> Settings:
         # Telegram
         BOT_TOKEN=getattr(cfg, "BOT_TOKEN", ""),
         
-        # DaData
-        DADATA_API_KEY=getattr(cfg, "DADATA_API_KEY", ""),
-        DADATA_SECRET_KEY=getattr(cfg, "DADATA_SECRET_KEY"),
+        # DaData (REMOVED - using OFData only)
+        # DADATA_API_KEY=getattr(cfg, "DADATA_API_KEY", ""),
+        # DADATA_SECRET_KEY=getattr(cfg, "DADATA_SECRET_KEY"),
         
         # OFData
         OFDATA_KEY=getattr(cfg, "OFDATA_KEY", ""),
@@ -151,7 +151,7 @@ def load_settings() -> Settings:
         
         log.info("Settings object created successfully", 
                 bot_token_present=bool(settings.BOT_TOKEN),
-                dadata_key_present=bool(settings.DADATA_API_KEY),
+                ofdata_key_present=bool(settings.OFDATA_KEY),
                 sqlite_path=settings.SQLITE_PATH,
                 msme_enabled=settings.FEATURE_MSME,
                 efrsb_enabled=settings.FEATURE_EFRSB,

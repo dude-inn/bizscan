@@ -3,7 +3,6 @@
 Обработчики поиска компаний (новая архитектура)
 """
 import re
-import asyncio
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
@@ -12,7 +11,7 @@ from bot.keyboards.main import main_menu_kb, report_menu_kb, results_kb, choose_
 from bot.states import SearchState, MenuState
 from core.logger import setup_logging
 from services.providers.ofdata import OFDataClient, OFDataClientError, OFDataServerTemporaryError
-from services.report.builder import ReportBuilder
+from services.aggregator import fetch_company_report_markdown
 # Name-based search and DN suggestions are disabled by plan
 
 router = Router(name="search")
@@ -158,15 +157,49 @@ async def _show_company_choices(message_or_cb, companies: list, state: FSMContex
             name_short = c.get("НаимСокр") or c.get("name_short") or c.get("short_name")
             name_full = c.get("НаимПолн") or c.get("name_full") or c.get("full_name") or c.get("name")
             title = name_short or name_full or "Неизвестно"
-            title = f"{title[:48]}" if len(title) > 48 else title
+            # Ограничиваем длину названия, чтобы кнопка оставалась читаемой
+            max_title_len = 40
+            if len(title) > max_title_len:
+                title = title[:max_title_len - 1] + "…"
+
+            # Извлекаем город из адреса, если доступен
+            city = None
+            # Пытаемся получить город/первую часть адреса из разных возможных мест
+            addr_obj = (
+                c.get("ЮрАдрес")
+                or c.get("Адрес")
+                or c.get("АдресРФ")
+                or c.get("address")
+                or c.get("full_address")
+                or c.get("value")
+                or {}
+            )
+            def _first_part(s: str) -> str:
+                parts = [p.strip() for p in s.split(",") if p.strip()]
+                return parts[0] if parts else s.strip()
+            if isinstance(addr_obj, dict):
+                city = (
+                    addr_obj.get("НасПункт")
+                    or addr_obj.get("city")
+                    or ( _first_part(addr_obj.get("АдресРФ") or "") if addr_obj.get("АдресРФ") else None )
+                    or ( _first_part(addr_obj.get("value") or "") if addr_obj.get("value") else None )
+                    or ( _first_part(addr_obj.get("full_address") or "") if addr_obj.get("full_address") else None )
+                    or ( _first_part(addr_obj.get("address") or "") if addr_obj.get("address") else None )
+                )
+            elif isinstance(addr_obj, str):
+                city = _first_part(addr_obj)
+            short_city = city or ""
             
             log.info("_show_company_choices: company processed", 
                     index=i,
                     inn=inn,
                     title=title,
-                    button_text=f"{title} — ИНН {inn}")
+                    city=short_city or None,
+                    button_text=(f"{title} — ИНН {inn}" + (f", {short_city}" if short_city else "")))
             
-            buttons.append([InlineKeyboardButton(text=f"{title} — ИНН {inn}", callback_data=f"select_company:{inn}")])
+            # Одна кнопка: Название — ИНН NNNNNNNNNN
+            main_btn = InlineKeyboardButton(text=f"{title} — ИНН {inn}", callback_data=f"select_company:{inn}")
+            buttons.append([main_btn])
     except Exception as e:
         log.error("_show_company_choices: error processing companies", error=str(e))
         await message_or_cb.answer("❌ Ошибка обработки результатов поиска.")
@@ -235,16 +268,17 @@ async def got_name_query(msg: Message, state: FSMContext):
     log.info("got_name_query: status message sent", user_id=msg.from_user.id)
     
     try:
-        # Получаем список компаний через новую систему
-        builder = ReportBuilder()
+        # Получаем список компаний через OFData
+        import asyncio
+        client = OFDataClient()
         
-        # Выполняем поиск через новую систему
-        # Используем obj="org" так как obj="company" возвращает 400
-        search_results = builder.client.search(
+        # Выполняем поиск напрямую (синхронно)
+        search_results = client.search_filtered(
             by="name",
             obj="org", 
             query=query,
-            limit=20
+            limit=20,
+            page=1
         )
         
         log.info("got_name_query: search results received", 
@@ -461,11 +495,104 @@ async def back_to_search(cb: CallbackQuery, state: FSMContext):
 async def select_company(cb: CallbackQuery, state: FSMContext):
     inn = cb.data.split(":", 1)[1]
     await state.update_data(query=inn)
-    await cb.message.edit_text(
-        f"✅ Выбрано: ИНН {inn}. Выберите тип отчёта:",
-        reply_markup=choose_report_kb()
-    )
+
+    # Пытаемся взять название/адрес/статус без доп. запросов
+    data = await state.get_data()
+    title = None
+    address = None
+    status_text = None
+
+    # 1) Если есть предпросмотр (ветка поиска по ИНН)
+    preview = data.get("company_preview") or {}
+    if isinstance(preview, dict):
+        if (preview.get("inn") == inn) or (str(preview.get("ИНН")) == inn):
+            title = preview.get("name_short") or preview.get("name_full")
+            # Адрес в предпросмотре может быть строкой или объектом
+            addr_obj = preview.get("address") or preview.get("ЮрАдрес")
+            if isinstance(addr_obj, dict):
+                address = (
+                    addr_obj.get("АдресРФ")
+                    or addr_obj.get("value")
+                    or addr_obj.get("full_address")
+                    or addr_obj.get("address")
+                )
+            else:
+                address = addr_obj
+
+    # 2) Если выбирали из списка (ветка поиска по названию)
+    if not title:
+        companies = data.get("all_companies", []) or []
+        if isinstance(companies, list):
+            for c in companies:
+                if not isinstance(c, dict):
+                    continue
+                c_inn = c.get("inn") or c.get("ИНН") or c.get("tax_number")
+                if str(c_inn) == inn:
+                    name_short = c.get("НаимСокр") or c.get("name_short") or c.get("short_name")
+                    name_full = c.get("НаимПолн") or c.get("name_full") or c.get("full_name") or c.get("name")
+                    title = name_short or name_full
+                    # адрес
+                    addr_obj = c.get("ЮрАдрес") or c.get("address") or c.get("АдресРФ") or c.get("Адрес") or {}
+                    if isinstance(addr_obj, dict):
+                        address = (
+                            addr_obj.get("АдресРФ")
+                            or addr_obj.get("value")
+                            or addr_obj.get("full_address")
+                            or addr_obj.get("address")
+                        )
+                    elif isinstance(addr_obj, str):
+                        address = addr_obj
+                    # статус
+                    status_text = (
+                        (c.get("Статус") if isinstance(c.get("Статус"), str) else None)
+                        or (c.get("Статус", {}) or {}).get("Наим")
+                        or c.get("status")
+                    )
+                    break
+
+    # Нормализуем статус и подберём отметку
+    status_line = None
+    if status_text:
+        normalized = str(status_text).strip().lower()
+        is_active = normalized in {"действует", "active", "активен", "активная", "активно"}
+        mark = "✅" if is_active else "❌"
+        human_status = "Действует" if is_active else "Не действует"
+        status_line = f"Статус: {mark} {human_status}"
+
+    # Формируем текст подтверждения в требуемом формате
+    lines = []
+    if title:
+        lines.append(title)
+    else:
+        lines.append("Компания")
+    lines.append(f"ИНН: {inn}")
+    if address:
+        lines.append(f"Адрес: {address}")
+    if status_line:
+        lines.append(status_line)
+    lines.append("\nВыберите тип отчёта:")
+
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📄 Сформировать отчёт", callback_data="report_free")],
+        [InlineKeyboardButton(text="🔙 Назад к результатам", callback_data="back_results")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_main")],
+    ])
+    await cb.message.edit_text("\n".join(lines), reply_markup=kb)
     await state.set_state(SearchState.SELECT)
+    await cb.answer()
+
+
+@router.callback_query(F.data == "back_results")
+async def back_to_results(cb: CallbackQuery, state: FSMContext):
+    """Возврат к списку результатов поиска на текущую страницу"""
+    data = await state.get_data()
+    all_companies = data.get("all_companies", [])
+    current_page = data.get("current_page", 0)
+    if not all_companies:
+        await cb.answer("Результаты поиска недоступны", show_alert=False)
+        return
+    await _show_company_choices(cb.message, all_companies, state, current_page)
     await cb.answer()
 
 
@@ -523,3 +650,4 @@ async def select_by_number(msg: Message, state: FSMContext):
 async def noop(cb: CallbackQuery, state: FSMContext):
     """Пустой обработчик"""
     await cb.answer()
+

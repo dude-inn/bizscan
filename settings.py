@@ -42,21 +42,15 @@ def _get_float(name: str, default: float) -> float:
 # === Telegram ===
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# === DaData API ===
-DADATA_API_KEY = os.getenv("DADATA_API_KEY")
-DADATA_SECRET_KEY = os.getenv("DADATA_SECRET_KEY")
+# === DaData API (REMOVED - using OFData only) ===
+# DADATA_API_KEY = os.getenv("DADATA_API_KEY")
+# DADATA_SECRET_KEY = os.getenv("DADATA_SECRET_KEY")
 
 # === Data Source Configuration === (OFData only)
 DATASOURCE = "ofdata"
-DATANEWTON_TIMEOUT = _get_int("DATANEWTON_TIMEOUT", 10)
-DATANEWTON_MAX_RETRIES = _get_int("DATANEWTON_MAX_RETRIES", 2)
-DATANEWTON_RATE_LIMIT_QPM = _get_int("DATANEWTON_RATE_LIMIT_QPM", 70)
-FEATURE_DATANEWTON = _get_bool("FEATURE_DATANEWTON", True)
-
-# === OFData (placeholder for Phase 2) ===
-OFDATA_API = os.getenv("OFDATA_API", "https://ofdata.ru/api")
+OFDATA_API = os.getenv("OFDATA_API", "https://api.ofdata.ru/v2")
 OFDATA_KEY = os.getenv("OFDATA_KEY")
-FEATURE_OFDATA = _get_bool("FEATURE_OFDATA", False)
+FEATURE_OFDATA = _get_bool("FEATURE_OFDATA", True)
 
 # === Реестр МСП ===
 MSME_DATA_URL = os.getenv(

@@ -9,8 +9,8 @@ import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
-from services.providers.ofdata import OFDataProvider
-from services.providers.openai import OpenAIProvider
+from services.providers.ofdata import OFDataClient
+from services.providers.openai_provider import OpenAIProvider
 from core.logger import setup_logging
 
 log = setup_logging()
@@ -19,7 +19,7 @@ class SimpleReportPipeline:
     """Простой конвейер формирования отчёта"""
     
     def __init__(self):
-        self.ofdata = OFDataProvider()
+        self.ofdata = OFDataClient()
         self.openai = OpenAIProvider()
         
         # Алиасы для русских подписей ключей
@@ -98,7 +98,7 @@ class SimpleReportPipeline:
         
         try:
             # 1. Получаем данные из OFData
-            data = await self._fetch_data(query, include_sections)
+            data = self._fetch_data(query, include_sections)
             
             # 2. Форматируем в человекочитаемый текст
             report_text = self._format_to_text(data, include_sections)
@@ -113,7 +113,7 @@ class SimpleReportPipeline:
             log.error("SimpleReportPipeline: error generating report", error=str(e), query=query)
             return f"❌ Ошибка при формировании отчёта: {str(e)}"
     
-    async def _fetch_data(self, query: str, include_sections: List[str]) -> Dict[str, Any]:
+    def _fetch_data(self, query: str, include_sections: List[str]) -> Dict[str, Any]:
         """Получает данные из OFData API"""
         data = {}
         
@@ -121,52 +121,52 @@ class SimpleReportPipeline:
         if query.isdigit() and len(query) in [10, 12]:
             # ИНН или ОГРН
             if len(query) == 10:
-                data['company'] = await self.ofdata.get_company(inn=query)
+                data['company'] = self.ofdata.get_counterparty(inn=query)
             else:
-                data['company'] = await self.ofdata.get_company(ogrn=query)
+                data['company'] = self.ofdata.get_counterparty(ogrn=query)
         else:
             # Поиск по названию
-            search_results = await self.ofdata.search_companies(query)
-            if search_results and len(search_results) > 0:
-                first_result = search_results[0]
+            search_results = self.ofdata.search_filtered(by="name", obj="org", query=query, limit=1)
+            if search_results and 'data' in search_results and search_results['data']:
+                first_result = search_results['data'][0]
                 inn = first_result.get('ИНН')
                 if inn:
-                    data['company'] = await self.ofdata.get_company(inn=inn)
+                    data['company'] = self.ofdata.get_counterparty(inn=inn)
             else:
                 raise ValueError("Компания не найдена")
         
         # Получаем дополнительные данные
         if 'finances' in include_sections:
             try:
-                data['finances'] = await self.ofdata.get_finances(inn=query)
+                data['finances'] = self.ofdata.get_finance(inn=query)
             except Exception as e:
                 log.warning("Could not fetch finances", error=str(e))
                 data['finances'] = None
         
         if 'legal-cases' in include_sections:
             try:
-                data['legal_cases'] = await self.ofdata.get_legal_cases(inn=query)
+                data['legal_cases'] = self.ofdata.get_arbitration_cases(inn=query)
             except Exception as e:
                 log.warning("Could not fetch legal cases", error=str(e))
                 data['legal_cases'] = None
         
         if 'enforcements' in include_sections:
             try:
-                data['enforcements'] = await self.ofdata.get_enforcements(inn=query)
+                data['enforcements'] = self.ofdata.get_enforcements(inn=query)
             except Exception as e:
                 log.warning("Could not fetch enforcements", error=str(e))
                 data['enforcements'] = None
         
         if 'inspections' in include_sections:
             try:
-                data['inspections'] = await self.ofdata.get_inspections(inn=query)
+                data['inspections'] = self.ofdata.get_inspections(inn=query)
             except Exception as e:
                 log.warning("Could not fetch inspections", error=str(e))
                 data['inspections'] = None
         
         if 'contracts' in include_sections:
             try:
-                data['contracts'] = await self.ofdata.get_contracts(inn=query)
+                data['contracts'] = self.ofdata.get_contracts(inn=query)
             except Exception as e:
                 log.warning("Could not fetch contracts", error=str(e))
                 data['contracts'] = None

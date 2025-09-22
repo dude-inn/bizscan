@@ -1,64 +1,85 @@
 # -*- coding: utf-8 -*-
 """
-Рендер секции с исполнительными производствами
+Рендер секции с исполнительными производствами - максимально простой
 """
-from typing import Dict, Any, List
-from .formatters import format_money, format_date, clean_text
-from .flattener import flatten, apply_aliases, extract_nested_value, count_array_items, sum_array_field
+from typing import Dict, Any
+from .simple_company_renderer import format_value, format_dict_item
 
 
 def render_enforce(data: Dict[str, Any]) -> str:
     """
-    Рендерит исполнительные производства
+    Рендерит исполнительные производства максимально просто
     
     Args:
         data: Данные исполнительных производств
         
     Returns:
-        Исполнительные производства
+        Информация об исполнительных производствах
     """
     lines = []
+    aliases = load_enforce_aliases()
     
-    if not data or 'data' not in data:
-        return "—"
-    
-    data_section = data['data']
-    
-    # Итоги
-    records = data_section.get('Записи', [])
-    total_records = len(records)
-    
-    if total_records == 0:
-        return "—"
-    
-    # Суммы
-    total_debt = sum(record.get('СумДолг', 0) for record in records)
-    total_remaining = sum(record.get('ОстЗадолж', 0) for record in records)
-    
-    lines.append(f"Всего производств: {total_records}")
-    
-    if total_debt > 0:
-        lines.append(f"Общая сумма долга: {format_money(total_debt)}")
-    
-    if total_remaining > 0:
-        lines.append(f"Остаток задолженности: {format_money(total_remaining)}")
-    
-    # Список производств
-    if records:
-        lines.append(f"\n10 последних производств:")
+    for key, value in data.items():
+        alias = aliases.get(key, key)
         
-        for i, record in enumerate(records[:10]):  # Показываем только первые 10
-            case_num = record.get('ИспПрНомер', '—')
-            date = record.get('ИспПрДата', '—')
-            bailiff = record.get('СудПристНаим', '—')
-            debt = record.get('СумДолг', 0)
-            remaining = record.get('ОстЗадолж', 0)
-            
-            # Форматируем дату
-            formatted_date = format_date(date) if date != '—' else '—'
-            
-            lines.append(f"• №{clean_text(case_num)} от {formatted_date}, Приставы: {clean_text(bailiff)}, Долг: {format_money(debt)}, Остаток: {format_money(remaining)}")
-    else:
-        lines.append("\nПроизводства не найдены")
+        if isinstance(value, dict):
+            if not value:
+                lines.append(f"{alias}: отсутствуют")
+            else:
+                lines.append(f"{alias}:")
+                for sub_key, sub_value in value.items():
+                    # Фильтруем записи по дате для исполнительных производств
+                    if sub_key == 'Записи' and isinstance(sub_value, list):
+                        current_year = 2025
+                        min_year = current_year - 5  # 2020
+                        filtered_records = []
+                        
+                        for record in sub_value:
+                            record_date = record.get('ИспПрДата', '')
+                            if record_date:
+                                try:
+                                    # Парсим дату (формат: YYYY-MM-DD)
+                                    year = int(record_date.split('-')[0])
+                                    if year >= min_year:
+                                        filtered_records.append(record)
+                                except (ValueError, IndexError):
+                                    # Если не можем распарсить дату, включаем запись
+                                    filtered_records.append(record)
+                            else:
+                                # Если даты нет, включаем запись
+                                filtered_records.append(record)
+                        
+                        sub_value = filtered_records
+                    
+                    sub_alias = aliases.get(f"{key}.{sub_key}", aliases.get(sub_key, sub_key))
+                    formatted_value = format_value(sub_value)
+                    lines.append(f"  {sub_alias}: {formatted_value}")
+        
+        elif isinstance(value, list):
+            if not value:
+                lines.append(f"{alias}: отсутствуют")
+            else:
+                lines.append(f"{alias}:")
+                for i, item in enumerate(value, 1):
+                    if isinstance(item, dict):
+                        formatted_item = format_dict_item(item, aliases)
+                        lines.append(f"  {i}. {formatted_item}")
+                    else:
+                        formatted_value = format_value(item)
+                        lines.append(f"  {i}. {formatted_value}")
+        
+        else:
+            formatted_value = format_value(value)
+            lines.append(f"{alias}: {formatted_value}")
     
     return "\n".join(lines)
+
+
+def load_enforce_aliases() -> Dict[str, str]:
+    """Алиасы для исполнительных производств"""
+    return {
+        'company': 'Компания',
+        'data': 'Данные исполнительных производств',
+        'meta': 'Метаданные',
+        # Добавить остальные поля по мере необходимости
+    }

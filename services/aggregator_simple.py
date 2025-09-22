@@ -109,3 +109,4 @@ class SimpleReportAggregator:
         except Exception as e:
             log.error("SimpleReportAggregator: error building markdown report", error=str(e))
             return f"❌ Ошибка при формировании отчёта: {str(e)}"
+

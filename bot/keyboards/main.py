@@ -37,6 +37,7 @@ def choose_report_kb() -> InlineKeyboardMarkup:
     """Выбор типа отчёта"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📊 Бесплатный отчёт", callback_data="report_free")],
+        [InlineKeyboardButton(text="📄 PDF-версия (Gamma)", callback_data="report_pdf_gamma")],
         [InlineKeyboardButton(text="💰 Полный отчёт (планируется)", callback_data="report_paid")],
         [InlineKeyboardButton(text="🔍 Новый поиск", callback_data="search_inn")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_main")],

@@ -22,6 +22,10 @@ openai>=1.0.0
 # Document generation
 python-docx>=1.1.0
 
+# Web automation for Gamma PDF extraction
+selenium>=4.15.0
+webdriver-manager>=4.0.0
+
 # XML processing for SOAP
 lxml>=4.9.0
 

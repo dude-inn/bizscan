@@ -14,9 +14,6 @@ class Settings:
     # Telegram
     BOT_TOKEN: str
     
-    # DaData (REMOVED - using OFData only)
-    # DADATA_API_KEY: str
-    # DADATA_SECRET_KEY: Optional[str]
     
     # OFData
     OFDATA_KEY: str
@@ -91,9 +88,6 @@ def load_settings() -> Settings:
         # Telegram
         BOT_TOKEN=getattr(cfg, "BOT_TOKEN", ""),
         
-        # DaData (REMOVED - using OFData only)
-        # DADATA_API_KEY=getattr(cfg, "DADATA_API_KEY", ""),
-        # DADATA_SECRET_KEY=getattr(cfg, "DADATA_SECRET_KEY"),
         
         # OFData
         OFDATA_KEY=getattr(cfg, "OFDATA_KEY", ""),

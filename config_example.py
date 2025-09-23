@@ -10,7 +10,6 @@ BOT_TOKEN = "your_bot_token_here"
 # === Data Source Configuration (OFData only) ===
 DATASOURCE = "ofdata"
 
-# DataNewton removed
 
 # === OFData API (для поиска по названию) ===
 OFDATA_API = "https://ofdata.ru/api"
@@ -25,9 +24,6 @@ OFDATA_PATH_LEGAL_CASES = "/v2/legal-cases"
 OFDATA_PATH_CONTRACTS = "/v2/contracts"
 OFDATA_PATH_ENFORCEMENTS = "/v2/enforcements"
 
-# === DaData API ===
-DADATA_API_KEY = "your_dadata_api_key_here"
-DADATA_SECRET_KEY = "your_dadata_secret_key_here"
 
 # === Реестр МСП ===
 MSME_DATA_URL = "https://ofd.nalog.ru/opendata/7707329152-rsmp/data-20241201-structure-20141120.csv"

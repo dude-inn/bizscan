@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 Форматирование данных для отчёта
 """
@@ -35,7 +35,7 @@ def format_money(x: Union[int, float, str, None]) -> str:
             return "—"
         
         # Форматируем с неразрывными пробелами как разделителями тысяч
-        formatted = f"{x:,.2f}".replace(',', '\u00A0').replace('.', ',')
+        formatted = f"{x:,.2f}".replace(',', ' ').replace('.', ',')
         return f"{formatted} ₽"
         
     except (ValueError, TypeError):
@@ -86,7 +86,8 @@ def format_percent(x: Union[int, float, str, None]) -> str:
             x = float(x.replace('%', '').replace(',', '.'))
         
         if isinstance(x, (int, float)):
-            return f"{x:.2f} %"
+            formatted = f"{x:.2f}".replace(".", ",")
+            return f"{formatted} %"
         
         return "—"
     except (ValueError, TypeError):
@@ -272,3 +273,4 @@ def clean_text(text: Union[str, None]) -> str:
     cleaned = re.sub(r'<[^>]+>', '', cleaned)
     
     return cleaned if cleaned else "—"
+

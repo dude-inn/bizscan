@@ -3,7 +3,9 @@
 Рендер секции с арбитражными делами - максимально простой
 """
 from typing import Dict, Any
+from .constants import SECTION_HEADERS, SECTION_SEPARATOR, ERROR_MESSAGES
 from .simple_company_renderer import format_value, format_dict_item
+from .formatters import format_money
 
 
 def render_legal(data: Dict[str, Any]) -> str:
@@ -46,8 +48,8 @@ def render_legal(data: Dict[str, Any]) -> str:
                         filtered_records.append(case)
                 
                 records = filtered_records
-                lines.append("АРБИТРАЖНЫЕ ДЕЛА")
-                lines.append("=" * 50)
+                lines.append(SECTION_HEADERS.get('legal-cases', 'АРБИТРАЖНЫЕ ДЕЛА'))
+                lines.append(SECTION_SEPARATOR)
                 
                 # Статистика
                 total_cases = len(records)
@@ -56,7 +58,7 @@ def render_legal(data: Dict[str, Any]) -> str:
                 defendant_count = sum(1 for case in records if case.get('Ответ'))
                 
                 lines.append(f"Всего дел: {total_cases}")
-                lines.append(f"Общая сумма исков: {total_amount:,.2f} руб.")
+                lines.append(f"Общая сумма исков: {format_money(total_amount)}")
                 lines.append(f"Как истец: {plaintiff_count} дел")
                 lines.append(f"Как ответчик: {defendant_count} дел")
                 lines.append("")
@@ -69,18 +71,20 @@ def render_legal(data: Dict[str, Any]) -> str:
                     
                     # Форматируем сумму
                     amount = case.get('СуммИск', 0)
-                    if isinstance(amount, (int, float)):
-                        amount_str = f"{amount:,.2f}"
-                    else:
-                        amount_str = str(amount)
+                    amount_str = format_money(amount) if isinstance(amount, (int, float)) else str(amount)
                     
-                    # Сокращенная запись
-                    case_line = f"{i}. {case.get('Номер', 'N/A')} | {case.get('Дата', 'N/A')} | {case.get('Суд', 'N/A')} | {amount_str} руб. | {role} | {case.get('СтрКАД', 'N/A')}"
+                    # Развернутая запись с дополнительными полями при наличии
+                    extras = []
+                    for k in ["Стадия", "Результат", "Категория", "Судья"]:
+                        if case.get(k):
+                            extras.append(f"{k}: {case.get(k)}")
+                    extras_str = f" | {' | '.join(extras)}" if extras else ""
+                    case_line = f"{i}. {case.get('Номер', 'N/A')} | {case.get('Дата', 'N/A')} | {case.get('Суд', 'N/A')} | {amount_str} | {role} | {case.get('СтрКАД', 'N/A')}{extras_str}"
                     lines.append(case_line)
             else:
-                lines.append("АРБИТРАЖНЫЕ ДЕЛА")
-                lines.append("=" * 50)
-                lines.append("Данные недоступны")
+                lines.append(SECTION_HEADERS.get('legal-cases', 'АРБИТРАЖНЫЕ ДЕЛА'))
+                lines.append(SECTION_SEPARATOR)
+                lines.append(ERROR_MESSAGES.get('data_unavailable', 'Данные недоступны'))
         else:
             # Обрабатываем остальные поля обычно
             alias = aliases.get(key, key)

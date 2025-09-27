@@ -18,7 +18,7 @@ def render_finances_simple(data: Dict[str, Any]) -> str:
     
     # Обрабатываем финансовые данные по годам
     current_year = 2025  # Текущий год
-    min_year = current_year - 5  # Минимальный год (2020)
+    min_year = current_year - 7  # Минимальный год (расширяем горизонт до 7 лет)
     
     for key, value in data.items():
         # Пропускаем явные нефинансовые блоки, если они затесались в структуру

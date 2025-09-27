@@ -15,3 +15,7 @@ class ReportState(StatesGroup):
     CHOOSE = State()
     GENERATE = State()
 
+
+class FeedbackState(StatesGroup):
+    WAITING_TEXT = State()
+

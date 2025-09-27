@@ -11,9 +11,9 @@ from pathlib import Path
 import aiosqlite
 from pydantic import BaseModel
 
-from core.logger import setup_logging
+from core.logger import get_logger
 
-log = setup_logging()
+log = get_logger(__name__)
 
 
 class CacheConfig(BaseModel):

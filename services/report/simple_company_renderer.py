@@ -4,6 +4,8 @@
 Переводит ВСЕ поля API в человекочитаемый вид
 """
 from typing import Dict, Any, List
+from .formatters import format_money, format_date, format_percent
+import re
 import json
 
 
@@ -38,6 +40,28 @@ def format_value(value: Any) -> str:
         return " | ".join(parts)
     
     return str(value)
+def format_value_by_key(key: str, value: Any) -> str:
+    """Форматирует значение с учётом ключа (тип поля)."""
+    if value is None or value == "":
+        return "отсутствуют" if isinstance(value, list) else "не указано"
+    try:
+        lower_key = key.lower()
+        # Деньги
+        if any(x in lower_key for x in ["сумма", "цена", "долг", "капитал", "прибыль", "выручка"]):
+            return format_money(value)
+        # Проценты/доли
+        if any(x in lower_key for x in ["процент", "доля"]):
+            return format_percent(value)
+        # Даты
+        if any(x in lower_key for x in ["дата", "год"]):
+            # Пробуем YYYY-MM-DD
+            if isinstance(value, str) and re.match(r"\d{4}-\d{2}-\d{2}", value):
+                return format_date(value)
+            return str(value)
+        # По умолчанию
+        return format_value(value)
+    except Exception:
+        return format_value(value)
 
 
 def format_dict_item(item: Dict[str, Any], aliases: Dict[str, str]) -> str:
@@ -59,7 +83,7 @@ def format_dict_item(item: Dict[str, Any], aliases: Dict[str, str]) -> str:
                             dict_parts = []
                             for sub_key, sub_value in list_item.items():
                                 sub_alias = aliases.get(f"{key}.{sub_key}", aliases.get(sub_key, sub_key))
-                                sub_formatted = format_value(sub_value)
+                                sub_formatted = format_value_by_key(sub_key, sub_value)
                                 dict_parts.append(f"{sub_alias}: {sub_formatted}")
                             list_items.append(f"{i}. {' | '.join(dict_parts)}")
                         else:
@@ -67,7 +91,7 @@ def format_dict_item(item: Dict[str, Any], aliases: Dict[str, str]) -> str:
                             list_items.append(f"{i}. {formatted_item}")
                     formatted_value = "; ".join(list_items)
             else:
-                formatted_value = format_value(value)
+                formatted_value = format_value_by_key(key, value)
             
             parts.append(f"{alias}: {formatted_value}")
     
@@ -125,7 +149,7 @@ def render_company_simple(data: Dict[str, Any]) -> str:
                                     formatted_item = format_dict_item(item, aliases)
                                     lines.append(f"    {i}. {formatted_item}")
                                 else:
-                                    lines.append(f"    {i}. {format_value(item)}")
+                                    lines.append(f"    {i}. {format_value_by_key(key, item)}")
                     elif isinstance(sub_value, dict):
                         if not sub_value:
                             lines.append(f"  {sub_alias}: отсутствуют")
@@ -133,9 +157,9 @@ def render_company_simple(data: Dict[str, Any]) -> str:
                             lines.append(f"  {sub_alias}:")
                             for sk, sv in sub_value.items():
                                 s_alias = aliases.get(f"{key}.{sub_key}.{sk}", aliases.get(sk, sk))
-                                lines.append(f"    {s_alias}: {format_value(sv)}")
+                                lines.append(f"    {s_alias}: {format_value_by_key(sk, sv)}")
                     else:
-                        lines.append(f"  {sub_alias}: {format_value(sub_value)}")
+                        lines.append(f"  {sub_alias}: {format_value_by_key(sub_key, sub_value)}")
         
         elif isinstance(value, list):
             if not value:
@@ -147,11 +171,11 @@ def render_company_simple(data: Dict[str, Any]) -> str:
                         formatted_item = format_dict_item(item, aliases)
                         lines.append(f"  {i}. {formatted_item}")
                     else:
-                        formatted_value = format_value(item)
+                        formatted_value = format_value_by_key(key, item)
                         lines.append(f"  {i}. {formatted_value}")
         
         else:
-            formatted_value = format_value(value)
+            formatted_value = format_value_by_key(key, value)
             lines.append(f"{alias}: {formatted_value}")
     
     return "\n".join(lines)

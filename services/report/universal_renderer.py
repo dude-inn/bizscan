@@ -191,8 +191,8 @@ def render_all_company_data(data: Dict[str, Any]) -> str:
                 section_data[key] = data[key]
         
         if section_data:
-            # Ограничиваем количество элементов в списках
-            max_items = 10 if "ОКВЭД" in section_title else 5
+            # Увеличиваем лимиты элементов для развернутого отчёта
+            max_items = 50 if "ОКВЭД" in section_title else 50
             section_lines = render_section(section_title, section_data, all_aliases, max_items)
             lines.extend(section_lines)
     
@@ -207,8 +207,16 @@ def render_all_company_data(data: Dict[str, Any]) -> str:
             remaining_fields[key] = value
     
     if remaining_fields:
-        remaining_lines = render_section("ПРОЧИЕ ДАННЫЕ", remaining_fields, all_aliases, 3)
+        remaining_lines = render_section("ПРОЧИЕ ДАННЫЕ", remaining_fields, all_aliases, 20)
         lines.extend(remaining_lines)
+
+    # ЕФРСБ: при отсутствии — показать критерии поиска и 0 найдено
+    if 'ЕФРСБ' not in data:
+        inn_value = data.get('ИНН', '^н/д^')
+        lines.append("\nЕФРСБ")
+        lines.append("=" * 50)
+        lines.append(f"Критерии поиска: ИНН {inn_value}")
+        lines.append("Найдено: 0")
     
     # Специальная обработка флага ОгрДоступ
     if data.get('ОгрДоступ', False):

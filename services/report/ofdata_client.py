@@ -6,9 +6,8 @@ import os
 import requests
 import time
 from typing import Dict, Any, Optional
-from core.logger import setup_logging, get_logger
+from core.logger import get_logger
 
-setup_logging()
 log = get_logger(__name__)
 
 
@@ -64,7 +63,7 @@ class OFDataClient:
         
         for attempt in range(max_retries + 1):
             try:
-                log.info("OFDataClient: making request", endpoint=endpoint, attempt=attempt+1, params=params)
+                log.debug("OFDataClient: request", endpoint=endpoint, attempt=attempt+1)
                 response = self.session.get(url, params=params, timeout=self.timeout)
                 response.raise_for_status()
                 
@@ -76,7 +75,7 @@ class OFDataClient:
                     error_msg = meta.get('message', 'Неизвестная ошибка API')
                     raise RuntimeError(f"API error: {error_msg}")
                 
-                log.info("OFDataClient: request successful", endpoint=endpoint)
+                log.debug("OFDataClient: ok", endpoint=endpoint)
                 return data
                 
             except requests.exceptions.RequestException as e:
@@ -324,6 +323,21 @@ class OFDataClient:
             params['kpp'] = ident['kpp']
         
         return self._make_request('entrepreneur', params)
+
+    def get_person(self, *, inn: str) -> Dict[str, Any]:
+        """
+        Получает информацию о физическом лице по ИНН
+        
+        Args:
+            inn: ИНН физического лица (обязателен)
+        
+        Returns:
+            Данные физлица
+        """
+        if not inn:
+            raise ValueError("Необходимо указать ИНН физического лица")
+        params = {'inn': inn}
+        return self._make_request('person', params)
     
     def search(self, by: str, obj: str, query: str, **opts) -> Dict[str, Any]:
         """

@@ -3,6 +3,7 @@
 Рендер секции с исполнительными производствами - максимально простой
 """
 from typing import Dict, Any
+from .constants import SECTION_HEADERS, SECTION_SEPARATOR, ERROR_MESSAGES
 from .simple_company_renderer import format_value, format_dict_item
 
 

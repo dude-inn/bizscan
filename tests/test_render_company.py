@@ -1,32 +1,24 @@
 # -*- coding: utf-8 -*-
 """
-Тесты для render_company.py
+Актуальные тесты для render_company.py
 """
-import pytest
 from services.report.render_company import render_company
 
 
 class TestRenderCompany:
-    """Тесты для рендеринга информации о компании"""
-    
+    """Проверяет текстовый рендер компании с новым форматом"""
+
     def test_render_company_with_taxes(self):
-        """Тест рендеринга компании с полным блоком налогов"""
         data = {
             "НаимПолн": "ООО Тестовая компания",
             "ИНН": "1234567890",
             "ОГРН": "1234567890123",
             "ДатаРег": "2020-03-15",
-            "Адрес": {
-                "АдресРФ": "г. Москва, ул. Тестовая, д. 1"
-            },
-            "ОКВЭДОсн": {
-                "Код": "62.01",
-                "Текст": "Деятельность в области информационных технологий"
-            },
+            "Адрес": {"АдресРФ": "г. Москва, ул. Тестовая, д. 1"},
             "Контакты": {
                 "Тел": ["+7-495-123-45-67", "+7-495-123-45-68"],
                 "Емэйл": ["test@example.com", "info@example.com"],
-                "ВебСайт": "https://example.com"
+                "ВебСайт": "https://example.com",
             },
             "Налоги": {
                 "ОсобРежим": ["УСН", "ПСН"],
@@ -35,162 +27,95 @@ class TestRenderCompany:
                 "СведУпл": [
                     {"Наим": "НДС", "Сумма": 800000},
                     {"Наим": "Налог на прибыль", "Сумма": 500000},
-                    {"Наим": "Налог на имущество", "Сумма": 200000}
                 ],
                 "СумНедоим": 50000,
-                "НедоимДата": "2023-12-31"
+                "НедоимДата": "2023-12-31",
             },
             "Учредители": [
                 {"Наим": "Иванов Иван Иванович", "ДоляПроц": "60"},
-                {"Наим": "Петров Петр Петрович", "ДоляПроц": "40"}
-            ]
+                {"Наим": "Петров Петр Петрович", "ДоляПроц": "40"},
+            ],
         }
-        
+
         result = render_company(data)
-        
-        # Проверяем, что результат содержит основные секции
-        assert "ОСНОВНОЕ" in result
-        assert "КОНТАКТЫ" in result
-        assert "НАЛОГИ" in result
-        assert "УЧРЕДИТЕЛИ" in result
-        
-        # Проверяем основную информацию
-        assert "ООО Тестовая компания" in result
-        assert "1234567890" in result
-        assert "1234567890123" in result
-        assert "15.03.2020" in result  # Дата отформатирована
-        
-        # Проверяем контакты
-        assert "Телефоны: +7-495-123-45-67, +7-495-123-45-68" in result
-        assert "Email: test@example.com, info@example.com" in result
-        assert "Сайт: https://example.com" in result
-        
-        # Проверяем налоги
-        assert "Режимы: УСН, ПСН" in result
-        assert "Год: 2023" in result
-        assert "Всего уплачено: 1 500 000,00 ₽" in result
-        assert "Топ-5 уплаченных налогов:" in result
-        assert "• НДС: 800 000,00 ₽" in result
-        assert "• Налог на прибыль: 500 000,00 ₽" in result
-        assert "• Налог на имущество: 200 000,00 ₽" in result
-        assert "Недоимка: 50 000,00 ₽ (на 31.12.2023)" in result
-        
-        # Проверяем учредителей
-        assert "1. Иванов Иван Иванович — 60%" in result
-        assert "2. Петров Петр Петрович — 40%" in result
-    
+
+        assert "НАЗВАНИЕ: ООО Тестовая компания" in result
+        assert "ИНН: 1234567890" in result
+        assert "Адрес:" in result
+        assert "Налоги:" in result
+        assert "ОсобРежим:" in result
+        assert "1. УСН" in result
+        assert "СведУплГод: 2023" in result
+        assert "СумУпл: 1500000" in result
+        assert "1. Наименование: НДС | Сумма: 800 000,00 ₽" in result
+        assert "СумНедоим: 50000" in result
+        assert "НедоимДата: 31.12.2023" in result
+        assert "Учредители:" in result
+        assert "1. Наименование: Иванов Иван Иванович | ДоляПроц: 60,00 %" in result
+
     def test_render_company_without_taxes(self):
-        """Тест рендеринга компании без блока налогов"""
         data = {
             "НаимПолн": "ООО Простая компания",
             "ИНН": "9876543210",
             "ОГРН": "9876543210987",
             "ДатаРег": "2021-06-01",
-            "Адрес": {
-                "АдресРФ": "г. Санкт-Петербург, ул. Простая, д. 2"
-            },
-            "ОКВЭДОсн": {
-                "Код": "47.11",
-                "Текст": "Торговля розничная преимущественно пищевыми продуктами"
-            },
+            "Адрес": {"АдресРФ": "г. Санкт-Петербург, ул. Простая, д. 2"},
             "Контакты": {
                 "Тел": ["+7-812-987-65-43"],
-                "Емэйл": ["simple@example.com"]
+                "Емэйл": ["simple@example.com"],
             },
             "Учредители": [
-                {"Наим": "Сидоров Сидор Сидорович", "ДоляПроц": "100"}
-            ]
+                {"Наим": "Сидоров Сидор Сидорович", "ДоляПроц": "100"},
+            ],
         }
-        
+
         result = render_company(data)
-        
-        # Проверяем, что результат содержит основные секции
-        assert "ОСНОВНОЕ" in result
-        assert "КОНТАКТЫ" in result
-        assert "УЧРЕДИТЕЛИ" in result
-        
-        # Проверяем основную информацию
-        assert "ООО Простая компания" in result
-        assert "9876543210" in result
-        assert "9876543210987" in result
-        assert "01.06.2021" in result
-        
-        # Проверяем контакты
-        assert "Телефоны: +7-812-987-65-43" in result
-        assert "Email: simple@example.com" in result
-        
-        # Проверяем учредителей
-        assert "1. Сидоров Сидор Сидорович — 100%" in result
-        
-        # Проверяем, что секция НАЛОГИ отсутствует (нет данных)
-        assert "НАЛОГИ" not in result
-    
+
+        assert "НАЗВАНИЕ: ООО Простая компания" in result
+        assert "Контакты:" in result
+        assert "Телефоны:" in result
+        assert "+7-812-987-65-43" in result
+        assert "Email:" in result
+        assert "simple@example.com" in result
+        assert "Учредители:" in result
+        assert "ДоляПроц: 100,00 %" in result
+        assert "Налоги:" not in result
+
     def test_render_company_empty_fields(self):
-        """Тест рендеринга компании с пустыми полями"""
         data = {
             "НаимПолн": "ООО Пустая компания",
             "ИНН": "1111111111",
             "ОГРН": "1111111111111",
-            "ДатаРег": "2022-01-01",
-            "Адрес": {},
+            "ДатаРег": "2019-05-20",
             "ОКВЭДОсн": {},
-            "Контакты": {},
+            "Контакты": {"Тел": [], "Емэйл": []},
             "Налоги": {},
-            "Учредители": []
+            "Учредители": [],
         }
-        
+
         result = render_company(data)
-        
-        # Проверяем, что результат содержит основные секции
-        assert "ОСНОВНОЕ" in result
-        assert "КОНТАКТЫ" in result
-        assert "УЧРЕДИТЕЛИ" in result
-        
-        # Проверяем основную информацию
-        assert "ООО Пустая компания" in result
-        assert "1111111111" in result
-        assert "1111111111111" in result
-        assert "01.01.2022" in result
-        
-        # Проверяем, что пустые поля не отображаются
-        assert "Телефоны:" not in result
-        assert "Email:" not in result
-        assert "Сайт:" not in result
-        assert "Режимы:" not in result
-        assert "Год:" not in result
-        assert "Всего уплачено:" not in result
-        assert "Топ-5 уплаченных налогов:" not in result
-        assert "Недоимка:" not in result
-        
-        # Проверяем учредителей (пустой список)
-        assert "—" in result  # Должен быть прочерк для пустого списка
-    
+
+        assert "ОКВЭДОсн: отсутствуют" in result
+        assert "Контакты:" in result
+        assert "Телефоны: отсутствуют" in result
+        assert "Email: отсутствуют" in result
+        assert "Налоги: отсутствуют" in result
+        assert "Учредители: отсутствуют" in result
+
     def test_render_company_missing_fields(self):
-        """Тест рендеринга компании с отсутствующими полями"""
         data = {
             "НаимПолн": "ООО Неполная компания",
-            "ИНН": "2222222222"
-            # Отсутствуют многие поля
+            "ИНН": "2222222222",
         }
-        
+
         result = render_company(data)
-        
-        # Проверяем, что результат содержит основные секции
-        assert "ОСНОВНОЕ" in result
-        assert "КОНТАКТЫ" in result
-        assert "УЧРЕДИТЕЛИ" in result
-        
-        # Проверяем основную информацию
-        assert "ООО Неполная компания" in result
-        assert "2222222222" in result
-        
-        # Проверяем, что отсутствующие поля не вызывают ошибок
-        assert "ОСНОВНОЕ" in result
-        assert "КОНТАКТЫ" in result
-        assert "УЧРЕДИТЕЛИ" in result
-    
+
+        assert "НАЗВАНИЕ: ООО Неполная компания" in result
+        assert "ИНН: 2222222222" in result
+        assert "ОГРН: не указано" in result
+        assert "ДАТА РЕГИСТРАЦИИ: не указано" in result
+
     def test_render_company_partial_taxes(self):
-        """Тест рендеринга компании с частичными данными о налогах"""
         data = {
             "НаимПолн": "ООО Частичная компания",
             "ИНН": "3333333333",
@@ -202,78 +127,59 @@ class TestRenderCompany:
                 "СумУпл": 500000,
                 "СведУпл": [
                     {"Наим": "НДС", "Сумма": 300000},
-                    {"Наим": "Налог на прибыль", "Сумма": 200000}
-                ]
-                # Отсутствуют СумНедоим и НедоимДата
+                    {"Наим": "Налог на прибыль", "Сумма": 200000},
+                ],
             },
             "Учредители": [
-                {"Наим": "Тестов Тест Тестович", "ДоляПроц": "100"}
-            ]
+                {"Наим": "Тестов Тест Тестович", "ДоляПроц": "100"},
+            ],
         }
-        
+
         result = render_company(data)
-        
-        # Проверяем, что результат содержит основные секции
-        assert "ОСНОВНОЕ" in result
-        assert "НАЛОГИ" in result
-        assert "УЧРЕДИТЕЛИ" in result
-        
-        # Проверяем налоги
-        assert "Режимы: УСН" in result
-        assert "Год: 2023" in result
-        assert "Всего уплачено: 500 000,00 ₽" in result
-        assert "Топ-5 уплаченных налогов:" in result
-        assert "• НДС: 300 000,00 ₽" in result
-        assert "• Налог на прибыль: 200 000,00 ₽" in result
-        
-        # Проверяем, что недоимка не отображается (нет данных)
-        assert "Недоимка:" not in result
-        
-        # Проверяем учредителей
-        assert "1. Тестов Тест Тестович — 100%" in result
-    
+
+        assert "Налоги:" in result
+        assert "ОсобРежим:" in result
+        assert "СумУпл: 500000" in result
+        assert "1. Наименование: НДС | Сумма: 300 000,00 ₽" in result
+        assert "2. Наименование: Налог на прибыль | Сумма: 200 000,00 ₽" in result
+        assert "СумНедоим" not in result
+        assert "Учредители:" in result
+        assert "Тестов Тест Тестович" in result
+
     def test_render_company_many_founders(self):
-        """Тест рендеринга компании с большим количеством учредителей"""
         data = {
             "НаимПолн": "ООО МногоУчредителей",
             "ИНН": "4444444444",
             "ОГРН": "4444444444444",
             "ДатаРег": "2023-01-01",
             "Учредители": [
-                {"Наим": f"Учредитель {i}", "ДоляПроц": str(100 // 15)} 
-                for i in range(15)  # 15 учредителей
-            ]
+                {"Наим": f"Учредитель {i}", "ДоляПроц": 6}
+                for i in range(15)
+            ],
         }
-        
+
         result = render_company(data)
-        
-        # Проверяем, что отображаются только первые 10 учредителей
-        assert "1. Учредитель 0" in result
-        assert "10. Учредитель 9" in result
-        assert "11. Учредитель 10" not in result  # Не должно быть
-        assert "15. Учредитель 14" not in result  # Не должно быть
-    
+
+        assert "Учредители:" in result
+        assert "1. Наименование: Учредитель 0 | ДоляПроц: 6,00 %" in result
+        assert "15. Наименование: Учредитель 14 | ДоляПроц: 6,00 %" in result
+
     def test_render_company_txt_format(self):
-        """Тест, что результат формируется в TXT формате"""
         data = {
             "НаимПолн": "ООО TXT Компания",
             "ИНН": "5555555555",
             "ОГРН": "5555555555555",
-            "ДатаРег": "2023-01-01"
+            "ДатаРег": "2023-01-01",
         }
-        
+
         result = render_company(data)
-        
-        # Проверяем, что результат не содержит HTML тегов
+
         assert "<" not in result
         assert ">" not in result
-        
-        # Проверяем, что результат не содержит Markdown разметки
         assert "**" not in result
         assert "__" not in result
         assert "##" not in result
-        
-        # Проверяем, что результат содержит только текстовые разделители
-        assert "=" in result  # Разделители секций
-        assert "•" in result  # Маркеры списков
-
+        assert "НАЗВАНИЕ:" in result
+        assert "ИНН:" in result
+        assert "ОГРН:" in result
+        assert "ДАТА РЕГИСТРАЦИИ:" in result

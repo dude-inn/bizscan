@@ -6,13 +6,34 @@ from __future__ import annotations
 
 import os
 import time
+import re
 from pathlib import Path
 from typing import Optional, Dict, Any
+import asyncio
+import functools
 
 import httpx
-from loguru import logger
+from core.logger import get_logger
+logger = get_logger(__name__)
 
-from settings import GAMMA_API_BASE, GAMMA_API_KEY, GAMMA_NUM_CARDS, GAMMA_ADDITIONAL_INSTRUCTIONS
+from settings import (
+    GAMMA_API_BASE,
+    GAMMA_API_KEY,
+    GAMMA_NUM_CARDS,
+    GAMMA_TEXT_MODE,
+    GAMMA_LONG_INSTRUCTIONS,
+    GAMMA_COMPACT_INSTRUCTIONS,
+    GAMMA_POLL_TIMEOUT_SEC,
+    GAMMA_POLL_INTERVAL_SEC,
+)
+
+# Python 3.8+ compatible to_thread polyfill
+try:
+    from asyncio import to_thread as asyncio_to_thread  # type: ignore
+except Exception:  # ImportError on <3.9 or shadowing
+    async def asyncio_to_thread(func, /, *args, **kwargs):  # type: ignore
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
 
 # Selenium imports for web automation
 try:
@@ -33,6 +54,27 @@ class GammaError(Exception):
     pass
 
 
+def _safe_filename(name: str, max_length: int = 50) -> str:
+    """Создает безопасное имя файла из названия компании"""
+    if not name:
+        return "company"
+    
+    # Убираем недопустимые символы для имен файлов
+    safe_name = re.sub(r'[<>:"/\\|?*]', '_', name)
+    
+    # Убираем лишние пробелы и заменяем на подчеркивания
+    safe_name = re.sub(r'\s+', '_', safe_name.strip())
+    
+    # Ограничиваем длину
+    if len(safe_name) > max_length:
+        safe_name = safe_name[:max_length]
+    
+    # Убираем подчеркивания в начале и конце
+    safe_name = safe_name.strip('_')
+    
+    return safe_name or "company"
+
+
 def _headers() -> Dict[str, str]:
     return {
         "Content-Type": "application/json",
@@ -45,7 +87,7 @@ def create_generation(
     *,
     export_as: str = "pdf",
     format: str = "document",
-    text_mode: str = "preserve",
+    text_mode: str = None,
     language: str = "ru",
     theme_name: Optional[str] = None,
     card_split: str = "inputTextBreaks",
@@ -54,11 +96,22 @@ def create_generation(
 ) -> str:
     """Create a generation and return generationId."""
     url = f"{GAMMA_API_BASE}/generations"
+    # text_mode приоритет: аргумент -> настройка -> 'preserve'
+    effective_text_mode = text_mode or GAMMA_TEXT_MODE or "preserve"
+    # Enforce Gamma API limit: numCards <= 60
+    if num_cards is not None and num_cards > 60:
+        logger.warning("Gamma: numCards too large, capping to 60", requested=num_cards)
+        num_cards = 60
+
     payload: Dict[str, Any] = {
         "inputText": input_text,
-        "textMode": text_mode,
+        "textMode": effective_text_mode,
         "format": format,
-        "textOptions": {"language": language},
+        "textOptions": {
+            "language": language,
+            "amount": "extensive",
+            "tone": "analytical, formal",
+        },
         "cardSplit": card_split,
         "exportAs": export_as,
     }
@@ -66,13 +119,31 @@ def create_generation(
         payload["themeName"] = theme_name
     if num_cards is not None:
         payload["numCards"] = num_cards
-    if additional_instructions:
-        payload["additionalInstructions"] = additional_instructions
+    # Используем компактную инструкцию из настроек, игнорируя длинную
+    compact = (additional_instructions or GAMMA_COMPACT_INSTRUCTIONS or "").strip()
+    if compact:
+        try:
+            if len(compact) > 500:
+                logger.warning("Gamma: compact instructions >500, truncating", length=len(compact))
+                compact = compact[:500]
+        except Exception:
+            pass
+        payload["additionalInstructions"] = compact
 
-    logger.info("Gamma: creating generation", payload_keys=list(payload.keys()))
+    logger.info(
+        "Gamma: creating generation",
+        has_theme=bool(theme_name),
+        themeName=theme_name or None,
+        numCards=num_cards,
+        cardSplit=card_split,
+        textMode=effective_text_mode,
+        format=format,
+        exportAs=export_as,
+        language=language,
+    )
     with httpx.Client(timeout=30.0) as client:
         resp = client.post(url, headers=_headers(), json=payload)
-    logger.info("Gamma: create response", status=resp.status_code, response_length=len(resp.text))
+    logger.info("Gamma: create response", status=resp.status_code)
     if resp.status_code == 401:
         logger.error("Gamma: 401 unauthorized — invalid API key?")
         raise GammaError("Unauthorized (401)")
@@ -87,7 +158,7 @@ def create_generation(
         raise GammaError(f"API error {resp.status_code}")
 
     data = resp.json()
-    logger.info("Gamma: create response data", data_keys=list(data.keys()) if isinstance(data, dict) else "not_dict")
+    logger.info("Gamma: create response data", data_keys=list(data.keys()) if isinstance(data, dict) else "not_dict", full_response=data)
     generation_id = data.get("generationId") or data.get("id")
     if not generation_id:
         logger.error("Gamma: generationId missing in response", response_data=data)
@@ -96,14 +167,21 @@ def create_generation(
     return generation_id
 
 
-def poll_generation(generation_id: str, *, interval_sec: float = 5, timeout_sec: int = 900, progress_callback=None) -> Dict[str, Any]:
+def poll_generation(generation_id: str, *, interval_sec: float = None, timeout_sec: int = None, progress_callback=None) -> Dict[str, Any]:
     """Poll generation until completed or timeout; return JSON."""
     url = f"{GAMMA_API_BASE}/generations/{generation_id}"
-    deadline = time.time() + timeout_sec
+    effective_interval = interval_sec if interval_sec is not None else float(GAMMA_POLL_INTERVAL_SEC)
+    effective_timeout = timeout_sec if timeout_sec is not None else int(GAMMA_POLL_TIMEOUT_SEC)
+    deadline = time.time() + effective_timeout
     start_time = time.time()
     with httpx.Client(timeout=20.0) as client:
         while time.time() < deadline:
-            resp = client.get(url, headers=_headers())
+            try:
+                resp = client.get(url, headers=_headers())
+            except httpx.ReadError as exc:
+                logger.warning("Gamma: read error while polling, retrying", error=str(exc))
+                time.sleep(effective_interval)
+                continue
             if resp.status_code == 401:
                 logger.error("Gamma: 401 unauthorized while polling")
                 raise GammaError("Unauthorized (401)")
@@ -122,32 +200,29 @@ def poll_generation(generation_id: str, *, interval_sec: float = 5, timeout_sec:
             elapsed = time.time() - start_time
             logger.info("Gamma: polling status", generation_id=generation_id, status=status, elapsed=elapsed)
             
-            # Вызываем callback для обновления прогресса
+            # Вызываем callback для обновления прогресса (только если это не асинхронная функция)
             if progress_callback:
-                progress_callback(status, elapsed, timeout_sec)
+                try:
+                    # Проверяем, является ли callback асинхронным
+                    if asyncio.iscoroutinefunction(progress_callback):
+                        logger.debug("Gamma: skipping async progress_callback in sync context")
+                    else:
+                        progress_callback(status, elapsed, timeout_sec)
+                except Exception as e:
+                    logger.debug("Gamma: progress_callback failed", error=str(e))
             
             if status == "completed":
-                logger.info("Gamma: generation completed", generation_id=generation_id, data_keys=list(data.keys()) if isinstance(data, dict) else "not_dict")
-                logger.info("Gamma: full completed response", response_data=data)
-                # Логируем полную структуру ответа для отладки
-                logger.info("Gamma: complete response structure", 
-                            response_keys=list(data.keys()) if isinstance(data, dict) else "not_dict",
-                            response_values={k: str(v)[:100] + "..." if len(str(v)) > 100 else v for k, v in data.items()} if isinstance(data, dict) else "not_dict")
-                # Логируем полный JSON ответ для анализа
-                logger.info("Gamma: FULL JSON RESPONSE", full_response=data)
-                # Также логируем как строку для полного понимания
-                import json
-                logger.info("Gamma: FULL JSON STRING", json_string=json.dumps(data, indent=2, ensure_ascii=False))
+                logger.info("Gamma: generation completed", generation_id=generation_id, full_response=data)
                 return data
-            time.sleep(interval_sec)
-    logger.warning("Gamma: polling timeout reached after 15 minutes")
+            time.sleep(effective_interval)
+    logger.warning("Gamma: polling timeout reached", timeout_sec=effective_timeout)
     raise GammaError("Polling timeout after 15 minutes")
 
 
 def download_file(url: str, dest_path: str) -> str:
     """Download PDF file from Gamma API with proper redirect handling."""
     Path(os.path.dirname(dest_path) or ".").mkdir(parents=True, exist_ok=True)
-    logger.info("Gamma: starting download", url=url, dest_path=dest_path)
+    logger.info("Gamma: downloading", dest_path=dest_path)
     
     # Согласно документации, используем stream=True и follow_redirects=True
     with httpx.Client(timeout=120.0) as client:
@@ -158,7 +233,7 @@ def download_file(url: str, dest_path: str) -> str:
                     f.write(chunk)
     
     file_size = os.path.getsize(dest_path)
-    logger.info("Gamma: download completed", dest_path=dest_path, file_size=file_size)
+    logger.info("Gamma: downloaded", dest_path=dest_path, file_size=file_size)
     return dest_path
 
 
@@ -377,23 +452,48 @@ def generate_pdf_from_report_text(
     language: str = "ru",
     theme_name: Optional[str] = None,
     progress_callback=None,
+    company_name: Optional[str] = None,
+    company_inn: Optional[str] = None,
 ) -> Optional[str]:
     if not GAMMA_API_KEY:
         logger.warning("Gamma: no API key configured")
         return None
+    # Разделяем секции визуальными разделителями для отдельных страниц в Gamma
+    try:
+        # Вставляем длинные инструкции в начало, затем визуальные разделители секций
+        long_instr = (GAMMA_LONG_INSTRUCTIONS or "").strip()
+        if long_instr:
+            preface = long_instr + "\n\n---\n\n"
+        else:
+            preface = ""
+        sectioned_text = preface + report_text.replace("\n\n", "\n\n---\n\n")
+    except Exception:
+        sectioned_text = report_text
     gen_id = create_generation(
-        input_text=report_text,
+        input_text=sectioned_text,
         export_as="pdf",
         format="document",
-        text_mode="preserve",
+        text_mode="generate",
         language=language,
         theme_name=theme_name,
         card_split="inputTextBreaks",
         num_cards=GAMMA_NUM_CARDS if GAMMA_NUM_CARDS > 0 else None,
-        additional_instructions=GAMMA_ADDITIONAL_INSTRUCTIONS if GAMMA_ADDITIONAL_INSTRUCTIONS else None,
+        additional_instructions=GAMMA_COMPACT_INSTRUCTIONS,
     )
-    result = poll_generation(gen_id, progress_callback=progress_callback)
+    result = poll_generation(
+        gen_id,
+        interval_sec=GAMMA_POLL_INTERVAL_SEC,
+        timeout_sec=GAMMA_POLL_TIMEOUT_SEC,
+        progress_callback=progress_callback,
+    )
     logger.info("Gamma: poll result", result_keys=list(result.keys()) if isinstance(result, dict) else "not_dict")
+    
+    # Формируем имя файла на основе названия компании и ИНН
+    if company_name and company_inn:
+        safe_name = _safe_filename(company_name)
+        filename = f"{safe_name}_{company_inn}.pdf"
+    else:
+        filename = f"report_{gen_id}.pdf"
     
     # Согласно документации Gamma API, ищем PDF URL в правильных полях
     pdf_url = None
@@ -412,12 +512,13 @@ def generate_pdf_from_report_text(
                 exportUrl=result.get("exportUrl"),
                 urls_pdf=result.get("urls", {}).get("pdf"),
                 files_pdf=result.get("files", {}).get("pdf"),
-                found_pdf_url=pdf_url)
+                found_pdf_url=pdf_url,
+                full_result=result)
     
     # Вариант 2: gammaUrl (для редактирования) - попробуем разные варианты
     if not pdf_url:
         gamma_url = result.get("gammaUrl")
-        logger.info("Gamma: gammaUrl found", gamma_url=gamma_url)
+        logger.info("Gamma: no direct PDF URL found, trying gammaUrl", gamma_url=gamma_url)
         if gamma_url:
             # Попробуем разные варианты экспорта
             export_variants = [
@@ -427,12 +528,15 @@ def generate_pdf_from_report_text(
                 f"{gamma_url}/pdf",
                 gamma_url  # попробуем и без параметров
             ]
+            logger.info("Gamma: trying export variants", variants=export_variants)
             
             for variant_url in export_variants:
                 logger.info("Gamma: trying gammaUrl variant", pdf_url=variant_url)
                 try:
                     # Проверим, доступен ли URL
+                    logger.info("Gamma: checking URL accessibility", url=variant_url)
                     response = httpx.get(variant_url, timeout=30)
+                    logger.info("Gamma: URL response", url=variant_url, status=response.status_code, content_type=response.headers.get("content-type"))
                     if response.status_code == 200:
                         logger.info("Gamma: PDF URL accessible", pdf_url=variant_url)
                         pdf_url = variant_url
@@ -488,23 +592,30 @@ def generate_pdf_from_report_text(
             logger.info("Gamma: trying Selenium PDF extraction", gamma_url=gamma_url)
             try:
                 Path(out_dir).mkdir(parents=True, exist_ok=True)
-                dest = os.path.join(out_dir, f"report_{gen_id}.pdf")
+                dest = os.path.join(out_dir, filename)
                 return get_pdf_via_selenium(gamma_url, dest)
             except Exception as e:
                 logger.warning("Gamma: Selenium PDF extraction failed", error=str(e))
     
     if not pdf_url:
+        gamma_url = result.get("gammaUrl")
+        if gamma_url:
+            logger.warning("Gamma: no PDF url found, returning edit link", gamma_url=gamma_url)
+            return f"LINK:{gamma_url}"
         logger.warning("Gamma: no PDF url found in any format", result=result)
         return None
         
     logger.info("Gamma: PDF url found", pdf_url=pdf_url)
+    logger.info("Gamma: starting PDF download", pdf_url=pdf_url)
     Path(out_dir).mkdir(parents=True, exist_ok=True)
-    dest = os.path.join(out_dir, f"report_{gen_id}.pdf")
+    dest = os.path.join(out_dir, filename)
     
     # Попробуем скачать PDF с обработкой истекших ссылок
     try:
-        logger.info("Gamma: downloading PDF", dest=dest)
-        return download_file(pdf_url, dest)
+        logger.info("Gamma: downloading PDF", pdf_url=pdf_url, dest=dest)
+        result = download_file(pdf_url, dest)
+        logger.info("Gamma: PDF download completed", result=result)
+        return result
     except Exception as e:
         logger.warning("Gamma: PDF download failed, trying to get fresh URL", error=str(e))
         
@@ -532,3 +643,158 @@ def generate_pdf_from_report_text(
             return None
 
 
+def generate_pptx_from_report_text(
+    report_text: str,
+    *,
+    out_dir: str = "reports",
+    language: str = "ru",
+    theme_name: Optional[str] = None,
+    progress_callback=None,
+    company_name: Optional[str] = None,
+    company_inn: Optional[str] = None,
+) -> Optional[str]:
+    if not GAMMA_API_KEY:
+        logger.warning("Gamma: no API key configured")
+        return None
+    # Разделяем секции визуальными разделителями для отдельных страниц в Gamma
+    try:
+        long_instr = (GAMMA_LONG_INSTRUCTIONS or "").strip()
+        if long_instr:
+            preface = long_instr + "\n\n---\n\n"
+        else:
+            preface = ""
+        sectioned_text = preface + report_text.replace("\n\n", "\n\n---\n\n")
+    except Exception:
+        sectioned_text = report_text
+    gen_id = create_generation(
+        input_text=sectioned_text,
+        export_as="pptx",
+        format="document",
+        text_mode="generate",
+        language=language,
+        theme_name=theme_name,
+        card_split="inputTextBreaks",
+        num_cards=GAMMA_NUM_CARDS if GAMMA_NUM_CARDS > 0 else None,
+        additional_instructions=GAMMA_COMPACT_INSTRUCTIONS,
+    )
+    result = poll_generation(
+        gen_id,
+        interval_sec=GAMMA_POLL_INTERVAL_SEC,
+        timeout_sec=GAMMA_POLL_TIMEOUT_SEC,
+        progress_callback=progress_callback,
+    )
+    logger.info("Gamma: poll result", result_keys=list(result.keys()) if isinstance(result, dict) else "not_dict")
+
+    # Имя файла
+    if company_name and company_inn:
+        safe_name = _safe_filename(company_name)
+        filename = f"{safe_name}_{company_inn}.pptx"
+    else:
+        filename = f"report_{gen_id}.pptx"
+
+    # Ищем PPTX URL
+    pptx_url = (
+        result.get("pptxUrl") or
+        result.get("powerpointUrl") or
+        result.get("fileUrl") or
+        result.get("exportUrl") or
+        result.get("urls", {}).get("pptx") or
+        result.get("files", {}).get("pptx") or
+        result.get("urls", {}).get("powerpoint") or
+        result.get("files", {}).get("powerpoint")
+    )
+    logger.info(
+        "Gamma: PPTX URL search",
+        pptxUrl=result.get("pptxUrl"),
+        powerPointUrl=result.get("powerpointUrl"),
+        fileUrl=result.get("fileUrl"),
+        exportUrl=result.get("exportUrl"),
+        urls=result.get("urls", {}),
+        files=result.get("files", {}),
+        found_url=pptx_url,
+    )
+
+    # Попытка через gammaUrl
+    if not pptx_url:
+        gamma_url = result.get("gammaUrl")
+        logger.info("Gamma: no direct PPTX URL found, trying gammaUrl", gamma_url=gamma_url)
+        if gamma_url:
+            export_variants = [
+                f"{gamma_url}?export=pptx",
+                f"{gamma_url}?format=pptx",
+                f"{gamma_url}/export/pptx",
+                f"{gamma_url}/pptx",
+                gamma_url,
+            ]
+            logger.info("Gamma: trying export variants", variants=export_variants)
+            for variant_url in export_variants:
+                try:
+                    response = httpx.get(variant_url, timeout=30)
+                    logger.info("Gamma: URL response", url=variant_url, status=response.status_code, content_type=response.headers.get("content-type"))
+                    if response.status_code == 200:
+                        pptx_url = variant_url
+                        break
+                except Exception as e:
+                    logger.warning("Gamma: error checking PPTX URL", error=str(e), url=variant_url)
+
+    # files endpoints
+    if not pptx_url:
+        try:
+            files_url = f"{GAMMA_API_BASE}/files/{gen_id}"
+            with httpx.Client(timeout=30.0) as client:
+                files_resp = client.get(files_url, headers=_headers())
+            logger.info("Gamma: files endpoint response", status=files_resp.status_code)
+            if files_resp.status_code == 200:
+                files_data = files_resp.json()
+                logger.info("Gamma: files endpoint data", files_data_keys=list(files_data.keys()) if isinstance(files_data, dict) else "not_dict")
+                pptx_url = files_data.get("pptx") or files_data.get("PPTX") or files_data.get("url")
+        except Exception as e:
+            logger.warning("Gamma: files endpoint failed", error=str(e))
+
+    if not pptx_url:
+        try:
+            alt_files_url = f"{GAMMA_API_BASE}/generations/{gen_id}/files"
+            with httpx.Client(timeout=30.0) as client:
+                alt_resp = client.get(alt_files_url, headers=_headers())
+            logger.info("Gamma: alt files endpoint response", status=alt_resp.status_code)
+            if alt_resp.status_code == 200:
+                alt_data = alt_resp.json()
+                logger.info("Gamma: alt files endpoint data", alt_data_keys=list(alt_data.keys()) if isinstance(alt_data, dict) else "not_dict")
+                pptx_url = alt_data.get("pptx") or alt_data.get("PPTX") or alt_data.get("url")
+        except Exception as e:
+            logger.warning("Gamma: alt files endpoint failed", error=str(e))
+
+    if not pptx_url:
+        gamma_url = result.get("gammaUrl")
+        if gamma_url:
+            logger.warning("Gamma: no PPTX url found, returning edit link", gamma_url=gamma_url)
+            return f"LINK:{gamma_url}"
+        logger.warning("Gamma: no PPTX url found in any format", result=result)
+        return None
+
+    # Скачиваем
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    dest = os.path.join(out_dir, filename)
+    try:
+        logger.info("Gamma: downloading PPTX", url=pptx_url, dest=dest)
+        result_path = download_file(pptx_url, dest)
+        logger.info("Gamma: PPTX download completed", result=result_path)
+        return result_path
+    except Exception as e:
+        logger.warning("Gamma: PPTX download failed, trying to get fresh URL", error=str(e))
+        try:
+            fresh_result = poll_generation(gen_id, timeout_sec=60)
+            fresh_url = (
+                fresh_result.get("pptxUrl") or fresh_result.get("powerpointUrl") or
+                fresh_result.get("fileUrl") or fresh_result.get("exportUrl") or
+                fresh_result.get("urls", {}).get("pptx") or fresh_result.get("files", {}).get("pptx")
+            )
+            if fresh_url:
+                logger.info("Gamma: fresh PPTX URL found", url=fresh_url)
+                return download_file(fresh_url, dest)
+            else:
+                logger.error("Gamma: no fresh PPTX URL found")
+                return None
+        except Exception as fresh_error:
+            logger.error("Gamma: failed to get fresh PPTX URL", error=str(fresh_error))
+            return None

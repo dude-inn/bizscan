@@ -1,11 +1,16 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 Тесты для агрегатора
 """
 import unittest
 from unittest.mock import patch, Mock
 import asyncio
+import services.aggregator as aggregator
 from services.aggregator import fetch_company_report_markdown, fetch_company_profile
+
+
+async def _immediate_asyncio_to_thread(func, /, *args, **kwargs):
+    return func(*args, **kwargs)
 
 
 class TestAggregator(unittest.TestCase):
@@ -13,10 +18,12 @@ class TestAggregator(unittest.TestCase):
     
     def setUp(self):
         """Настройка тестов"""
+        aggregator._builder = None
         self.test_inn = "1234567890"
         self.test_ogrn = "1234567890123"
         self.test_name = "ООО ТЕСТ"
     
+    @patch('services.aggregator.asyncio_to_thread', new=_immediate_asyncio_to_thread)
     @patch('services.aggregator.ReportBuilder')
     def test_fetch_company_report_markdown_inn(self, mock_builder_class):
         """Тест получения отчёта по ИНН"""
@@ -32,9 +39,10 @@ class TestAggregator(unittest.TestCase):
         mock_builder.build_simple_report.assert_called_once_with(
             ident={'inn': self.test_inn},
             include=['company', 'taxes', 'finances', 'legal-cases', 'enforcements', 'inspections', 'contracts'],
-            max_rows=100
+            max_rows=500
         )
     
+    @patch('services.aggregator.asyncio_to_thread', new=_immediate_asyncio_to_thread)
     @patch('services.aggregator.ReportBuilder')
     def test_fetch_company_report_markdown_ogrn(self, mock_builder_class):
         """Тест получения отчёта по ОГРН"""
@@ -50,9 +58,10 @@ class TestAggregator(unittest.TestCase):
         mock_builder.build_simple_report.assert_called_once_with(
             ident={'ogrn': self.test_ogrn},
             include=['company', 'taxes', 'finances', 'legal-cases', 'enforcements', 'inspections', 'contracts'],
-            max_rows=100
+            max_rows=500
         )
     
+    @patch('services.aggregator.asyncio_to_thread', new=_immediate_asyncio_to_thread)
     @patch('services.aggregator.ReportBuilder')
     def test_fetch_company_report_markdown_name(self, mock_builder_class):
         """Тест получения отчёта по названию"""
@@ -68,9 +77,10 @@ class TestAggregator(unittest.TestCase):
         mock_builder.build_simple_report.assert_called_once_with(
             ident={'name': self.test_name},
             include=['company', 'taxes', 'finances', 'legal-cases', 'enforcements', 'inspections', 'contracts'],
-            max_rows=100
+            max_rows=500
         )
     
+    @patch('services.aggregator.asyncio_to_thread', new=_immediate_asyncio_to_thread)
     @patch('services.aggregator.ReportBuilder')
     def test_fetch_company_profile(self, mock_builder_class):
         """Тест получения профиля компании"""
@@ -88,4 +98,11 @@ class TestAggregator(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+
+
+
+
+
 

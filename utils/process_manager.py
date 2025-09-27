@@ -7,9 +7,9 @@ import sys
 import subprocess
 import signal
 from typing import List, Optional
-from core.logger import setup_logging
+from core.logger import get_logger
 
-log = setup_logging()
+log = get_logger(__name__)
 
 def find_python_processes() -> List[dict]:
     """Находит все запущенные Python процессы используя tasklist"""

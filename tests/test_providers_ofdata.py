@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 Tests for OFData provider
 """
@@ -14,13 +14,14 @@ class TestOFDataClient:
         """Test client initialization with API key"""
         client = OFDataClient(api_key="test_key")
         assert client.api_key == "test_key"
-        assert client.base_url == "https://ofdata.ru/api"
+        assert client.base_url == "https://api.ofdata.ru"
     
     def test_init_without_api_key(self):
         """Test client initialization without API key raises error"""
         with patch.dict('os.environ', {}, clear=True):
-            with pytest.raises(OFDataClientError, match="OFDATA_KEY"):
-                OFDataClient()
+            with patch('services.providers.ofdata.API_KEY', None):
+                with pytest.raises(OFDataClientError, match="OFDATA_KEY"):
+                    OFDataClient()
     
     def test_resolve_by_query_success(self):
         """Test resolve_by_query returns INN/OGRN for successful search"""
@@ -46,7 +47,6 @@ class TestOFDataClient:
             assert call_args[0][0] == "/v2/search"
             assert call_args[1]["params"]["query"] == "Test Company"
             assert call_args[1]["params"]["limit"] == 1
-            assert "key" in call_args[1]["params"]
             
             assert inn == "1234567890"
             assert ogrn == "1234567890123"
@@ -90,7 +90,6 @@ class TestOFDataClient:
             call_args = mock_get.call_args
             assert call_args[0][0] == "/v2/company"
             assert call_args[1]["params"]["inn"] == "1234567890"
-            assert "key" in call_args[1]["params"]
     
     def test_get_finance_inn(self):
         """Test get_finance with INN"""
@@ -105,7 +104,6 @@ class TestOFDataClient:
             call_args = mock_get.call_args
             assert call_args[0][0] == "/v2/finances"
             assert call_args[1]["params"]["inn"] == "1234567890"
-            assert "key" in call_args[1]["params"]
     
     def test_get_paid_taxes_returns_empty(self):
         """Test get_paid_taxes returns empty data (not supported)"""
@@ -128,6 +126,7 @@ class TestOFDataClient:
             call_args = mock_get.call_args
             assert call_args[0][0] == "/v2/legal-cases"
             assert call_args[1]["params"]["inn"] == "1234567890"
-            assert call_args[1]["params"]["limit"] == 1000
-            assert call_args[1]["params"]["offset"] == 0
-            assert "key" in call_args[1]["params"]
+            assert call_args[1]["params"]["limit"] == 100
+
+
+

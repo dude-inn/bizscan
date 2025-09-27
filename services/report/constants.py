@@ -24,11 +24,8 @@ SECTION_HEADERS = {
     'entrepreneur': 'ИП'
 }
 
-# OpenAI секции
-OPENAI_SECTIONS = {
-    'history': 'ИСТОРИЯ КОМПАНИИ',
-    'summary': 'РЕЗЮМЕ'
-}
+# OpenAI секции отключены
+OPENAI_SECTIONS = {}
 
 # Сообщения об ошибках
 ERROR_MESSAGES = {
@@ -57,4 +54,6 @@ TAX_REGIMES = {
     'ЕНВД': 'Единый налог на вменённый доход',
     'ПСН': 'Патентная система налогообложения'
 }
+
+
 

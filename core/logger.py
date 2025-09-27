@@ -6,11 +6,20 @@ import os
 from pathlib import Path
 
 _logger_initialized = False
+_configured_level = None
+_configured_format = None
 
-def setup_logging():
+from typing import Optional
+
+def setup_logging(log_level: Optional[str] = None, log_format: Optional[str] = None):
     global _logger_initialized
+    global _configured_level, _configured_format
     
+    # Idempotent with possibility to upgrade level/format once
     if not _logger_initialized:
+        _configured_level = (log_level or os.getenv("LOG_LEVEL") or "INFO").upper()
+        _configured_format = (log_format or os.getenv("LOG_FORMAT") or "text").lower()
+        level_value = getattr(logging, _configured_level, logging.INFO)
         # Создаем папку logs если её нет
         logs_dir = Path("logs")
         logs_dir.mkdir(exist_ok=True)
@@ -34,14 +43,15 @@ def setup_logging():
         
         console_handler = logging.StreamHandler()
         
-        logging.basicConfig(
-            level=logging.DEBUG,
-            format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-            handlers=[file_handler, console_handler]
-        )
+        # Console format readable, file structured
+        console_formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+        file_formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+        console_handler.setFormatter(console_formatter)
+        file_handler.setFormatter(file_formatter)
+        logging.basicConfig(level=level_value, handlers=[file_handler, console_handler])
         
         structlog.configure(
-            wrapper_class=structlog.make_filtering_bound_logger(logging.DEBUG),
+            wrapper_class=structlog.make_filtering_bound_logger(level_value),
             processors=[
                 structlog.processors.TimeStamper(fmt="iso"),
                 structlog.processors.add_log_level,

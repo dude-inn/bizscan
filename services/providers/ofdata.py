@@ -46,7 +46,7 @@ class OFDataClient(CompanyProvider):
     Authorization: query param ?key=...
     """
 
-    def __init__(self, base_url: str | None = None, api_key: str | None = None, timeout: float = TIMEOUT):
+    def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None, timeout: float = TIMEOUT):
         if api_key is None:
             api_key = API_KEY
         if not api_key:

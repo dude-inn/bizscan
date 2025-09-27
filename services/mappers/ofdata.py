@@ -94,44 +94,59 @@ def _extract(d: Dict[str, Any], path: str, default=None):
 
 def map_status_ofdata(status_obj: Dict[str, Any] | str) -> Tuple[str, Optional[str]]:
     """Map OFData status to our status codes (supports dict or string)."""
-    from core.logger import setup_logging
-    log = setup_logging()
-    
-    log.info("map_status_ofdata: processing status", 
-            status_obj_type=type(status_obj).__name__,
-            status_obj_value=str(status_obj)[:200])
-    
+    from core.logger import get_logger
+    log = get_logger(__name__)
+
+    log.info("map_status_ofdata: processing status",
+             status_obj_type=type(status_obj).__name__,
+             status_obj_value=str(status_obj)[:200])
+
     if isinstance(status_obj, str):
-        status_name = status_obj.lower()
         status_text = status_obj
     elif isinstance(status_obj, dict):
-        status_name = (status_obj.get("Наим") or status_obj.get("name") or "").lower()
-        status_text = status_obj.get("Наим") or status_obj.get("name")
+        status_text = (
+            status_obj.get("status_rus")
+            or status_obj.get("status")
+            or status_obj.get("Наим")
+            or status_obj.get("name")
+        )
     else:
-        log.warning("map_status_ofdata: unknown status object type", 
+        log.warning("map_status_ofdata: unknown status object type",
                    status_obj_type=type(status_obj).__name__)
         return "UNKNOWN", None
 
-    log.info("map_status_ofdata: status analysis", 
-            status_name=status_name,
-            status_text=status_text,
-            is_dict=isinstance(status_obj, dict))
+    status_name = (status_text or "").lower()
 
-    if "действующ" in status_name or "active" in status_name or (isinstance(status_obj, dict) and status_obj.get("active_status") in (True, 1, "1", "true")):
-        result = "ACTIVE", status_text or "Действует"
-        log.info("map_status_ofdata: mapped to ACTIVE", result=result)
-        return result
-    if "ликвидирован" in status_name or "liquidat" in status_name or (isinstance(status_obj, dict) and (status_obj.get("date_end") or "")):
-        result = "LIQUIDATED", status_text or "Ликвидировано"
-        log.info("map_status_ofdata: mapped to LIQUIDATED", result=result)
-        return result
+    log.info("map_status_ofdata: status analysis",
+             status_name=status_name,
+             status_text=status_text,
+             is_dict=isinstance(status_obj, dict))
+
     if "не действует" in status_name or "исключен" in status_name or "inactive" in status_name:
         result = "NOT_ACTIVE", status_text or "Не действует"
         log.info("map_status_ofdata: mapped to NOT_ACTIVE", result=result)
         return result
-    
-    result = "UNKNOWN", status_text
-    log.warning("map_status_ofdata: mapped to UNKNOWN", 
+    if "ликвидирован" in status_name or "liquidat" in status_name or (
+        isinstance(status_obj, dict) and bool(status_obj.get("date_end"))
+    ):
+        result = "LIQUIDATED", status_text or "Ликвидировано"
+        log.info("map_status_ofdata: mapped to LIQUIDATED", result=result)
+        return result
+    if (
+        "действующ" in status_name
+        or "действует" in status_name
+        or "active" in status_name
+        or (
+            isinstance(status_obj, dict)
+            and status_obj.get("active_status") in (True, 1, "1", "true")
+        )
+    ):
+        result = "ACTIVE", status_text or "Действует"
+        log.info("map_status_ofdata: mapped to ACTIVE", result=result)
+        return result
+
+    result = "UNKNOWN", status_text or None
+    log.warning("map_status_ofdata: mapped to UNKNOWN",
                result=result,
                status_name=status_name,
                status_text=status_text)
@@ -142,8 +157,8 @@ def map_company_ofdata(raw: Dict[str, Any]) -> CompanyCard:
     """Map OFData company response to CompanyCard.
     Supports payloads like {inn, ogrn, company: {...}} or {data: {...}} or flat.
     """
-    from core.logger import setup_logging
-    log = setup_logging()
+    from core.logger import get_logger
+    log = get_logger(__name__)
 
     # Determine container with company fields
     container: Dict[str, Any] = (
@@ -152,9 +167,9 @@ def map_company_ofdata(raw: Dict[str, Any]) -> CompanyCard:
         raw.get("data") if isinstance(raw.get("data"), dict) else None
     ) or raw
 
-    log.info(f"🔍 OFData mapping - raw keys: {list(raw.keys())}")
+    log.debug(f"OFData mapping - raw keys: {list(raw.keys())}")
     try:
-        log.info(f"🧩 Company container keys: {list(container.keys())}")
+        log.debug(f"Company container keys: {list(container.keys())}")
     except Exception:
         pass
 
@@ -274,14 +289,14 @@ def map_company_ofdata(raw: Dict[str, Any]) -> CompanyCard:
         if isinstance(modes, list) and modes:
             tax_mode = ", ".join(map(str, modes))
         else:
-            log.info("No tax modes found in Налоги section", nalogi_keys=list(nalogi.keys()) if isinstance(nalogi, dict) else None)
+            log.debug("No tax modes found in Налоги section", nalogi_keys=list(nalogi.keys()) if isinstance(nalogi, dict) else None)
     else:
-        log.info("No Налоги section found in container", container_keys=list(container.keys()))
+        log.debug("No Налоги section found in container", container_keys=list(container.keys()))
 
     # Workers count
     workers_count = container.get("СЧР") or container.get("workers_count")
     if workers_count is None:
-        log.info("No СЧР (workers_count) found in container", container_keys=list(container.keys()))
+        log.debug("No СЧР (workers_count) found in container", container_keys=list(container.keys()))
     try:
         workers_count = int(workers_count) if workers_count is not None else None
     except Exception:
@@ -316,8 +331,7 @@ def map_company_ofdata(raw: Dict[str, Any]) -> CompanyCard:
     }
 
     log.info(
-        f"📊 Mapped company: {name_full[:50]}... | INN: {inn} | Status: {status_code} | "
-        f"Address: {bool(address)} | Manager: {manager_name is not None} | OKVED: {okved is not None}"
+        f"Mapped company: {name_full[:50]}... | INN: {inn} | Status: {status_code}"
     )
 
     return CompanyCard(
@@ -371,12 +385,40 @@ def map_finance_ofdata(raw: Dict[str, Any]) -> List[FinanceSnapshot]:
             if not isinstance(item, dict):
                 continue
             period = str(item.get("period") or item.get("year") or "")
-            revenue = item.get("revenue") or item.get("income") or item.get("2110")
-            net_profit = item.get("net_profit") or item.get("profit") or item.get("2400")
-            assets = item.get("assets") or item.get("1600")
-            equity = item.get("equity") or item.get("1300")
-            lt = item.get("long_term_liabilities") or item.get("1400")
-            st = item.get("short_term_liabilities") or item.get("1500")
+            revenue = (
+                item.get("revenue")
+                or item.get("income")
+                or item.get("выручка")
+                or item.get("2110")
+            )
+            net_profit = (
+                item.get("net_profit")
+                or item.get("profit")
+                or item.get("чистая_прибыль")
+                or item.get("2400")
+            )
+            assets = (
+                item.get("assets")
+                or item.get("активы")
+                or item.get("активы_итого")
+                or item.get("1600")
+            )
+            equity = (
+                item.get("equity")
+                or item.get("капитал")
+                or item.get("собственный_капитал")
+                or item.get("1300")
+            )
+            lt = (
+                item.get("long_term_liabilities")
+                or item.get("долгосрочные_обязательства")
+                or item.get("1400")
+            )
+            st = (
+                item.get("short_term_liabilities")
+                or item.get("краткосрочные_обязательства")
+                or item.get("1500")
+            )
 
             snapshots.append(
                 FinanceSnapshot(

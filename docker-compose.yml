@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  # PostgreSQL database
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: bizscan
+      POSTGRES_USER: bizscan
+      POSTGRES_PASSWORD: bizscan_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bizscan -d bizscan"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching (optional)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # BizScan Bot application
+  bot:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Database
+      DATABASE_TYPE: postgresql
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: bizscan
+      POSTGRES_USER: bizscan
+      POSTGRES_PASSWORD: bizscan_password
+      
+      # Bot configuration
+      BOT_TOKEN: ${BOT_TOKEN}
+      OFDATA_KEY: ${OFDATA_KEY}
+      GAMMA_API_KEY: ${GAMMA_API_KEY}
+      
+      # Queue settings
+      GAMMA_QUEUE_MAX_WORKERS: 2
+      GAMMA_DAILY_LIMIT: 50
+      GAMMA_RATE_LIMIT_PER_MINUTE: 5
+      OFDATA_QUEUE_MAX_WORKERS: 5
+      OFDATA_RATE_LIMIT_PER_MINUTE: 30
+      OFDATA_RATE_LIMIT_PER_HOUR: 1000
+      
+      # Logging
+      LOG_LEVEL: INFO
+      LOG_FORMAT: json
+      
+      # Payment
+      ROBOKASSA_MERCHANT_LOGIN: ${ROBOKASSA_MERCHANT_LOGIN}
+      ROBOKASSA_PASSWORD1: ${ROBOKASSA_PASSWORD1}
+      ROBOKASSA_PASSWORD2: ${ROBOKASSA_PASSWORD2}
+      ROBOKASSA_IS_TEST: "true"
+      
+    volumes:
+      - ./data:/app/data
+      - ./reports:/app/reports
+      - ./logs:/app/logs
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  postgres_data:
+  redis_data:
+
+

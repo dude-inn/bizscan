@@ -51,37 +51,45 @@ def apply_aliases(flat: Dict[str, Any], aliases: Dict[str, str]) -> Dict[str, An
     Returns:
         Данные с применёнными алиасами
     """
-    result = {}
-    
+    result: Dict[str, Any] = {}
+    latest_year: Dict[str, int] = {}
+
     for key, value in flat.items():
-        # Ищем точное совпадение
-        if key in aliases:
-            result[aliases[key]] = value
-        else:
-            # Ищем шаблоны для массивов
-            found_alias = None
-            for alias_key, alias_value in aliases.items():
-                if alias_key.endswith("[]") and key.startswith(alias_key[:-2]):
-                    found_alias = alias_value
+        applied = False
+
+        for alias_key, alias_value in aliases.items():
+            # Точное совпадение
+            if alias_key == key:
+                result[alias_value] = value
+                applied = True
+                break
+
+            # Алиасы для массивов: "path[].field"
+            if '[]' in alias_key:
+                prefix, suffix = alias_key.split('[]', 1)
+                if key.startswith(prefix) and key.endswith(suffix):
+                    if alias_value not in result:
+                        result[alias_value] = value
+                    applied = True
                     break
-                # Ищем шаблоны для дат по годам в finances
-                elif "<year>" in alias_key:
-                    # Заменяем <year> на фактический год из ключа
-                    if "data." in key and "." in key:
-                        parts = key.split(".")
-                        if len(parts) >= 3 and parts[0] == "data" and parts[1].isdigit():
-                            year = parts[1]
-                            template_key = alias_key.replace("<year>", year)
-                            if key.startswith(template_key):
-                                found_alias = alias_value
-                                break
-            
-            if found_alias:
-                result[found_alias] = value
-            else:
-                # Оставляем оригинальный ключ
-                result[key] = value
-    
+
+            # Алиасы с параметром года: "data.<year>.code"
+            if '<year>' in alias_key:
+                prefix, suffix = alias_key.split('<year>', 1)
+                if key.startswith(prefix) and key.endswith(suffix):
+                    year_part = key[len(prefix): len(key) - len(suffix)]
+                    if year_part.isdigit():
+                        year = int(year_part)
+                        prev_year = latest_year.get(alias_value, -1)
+                        if year > prev_year:
+                            result[alias_value] = value
+                            latest_year[alias_value] = year
+                    applied = True
+                    break
+
+        if not applied:
+            result[key] = value
+
     return result
 
 

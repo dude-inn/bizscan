@@ -3,6 +3,7 @@
 Рендер секции с проверками - максимально простой
 """
 from typing import Dict, Any
+from .constants import SECTION_HEADERS, SECTION_SEPARATOR, ERROR_MESSAGES
 from .simple_company_renderer import format_value, format_dict_item
 
 
@@ -44,8 +45,8 @@ def render_inspect(data: Dict[str, Any]) -> str:
                         filtered_records.append(inspection)
                 records = filtered_records
 
-                lines.append("ПРОВЕРКИ")
-                lines.append("=" * 50)
+                lines.append(SECTION_HEADERS.get('inspections', 'ПРОВЕРКИ'))
+                lines.append(SECTION_SEPARATOR)
                 header_added = True
 
                 # Статистика (защита от не-словарей)
@@ -81,18 +82,18 @@ def render_inspect(data: Dict[str, Any]) -> str:
                     )
                     lines.append(inspection_line)
             else:
-                lines.append("ПРОВЕРКИ")
-                lines.append("=" * 50)
-                lines.append("Данные недоступны")
+                lines.append(SECTION_HEADERS.get('inspections', 'ПРОВЕРКИ'))
+                lines.append(SECTION_SEPARATOR)
+                lines.append(ERROR_MESSAGES.get('data_unavailable', 'Данные недоступны'))
         except Exception as e:
-            if not lines or lines[-1] != "=" * 50:
-                lines.append("ПРОВЕРКИ")
-                lines.append("=" * 50)
+            if not lines or lines[-1] != SECTION_SEPARATOR:
+                lines.append(SECTION_HEADERS.get('inspections', 'ПРОВЕРКИ'))
+                lines.append(SECTION_SEPARATOR)
             lines.append(f"Ошибка обработки данных: {str(e)}")
     else:
-        lines.append("ПРОВЕРКИ")
-        lines.append("=" * 50)
-        lines.append("Данные недоступны")
+        lines.append(SECTION_HEADERS.get('inspections', 'ПРОВЕРКИ'))
+        lines.append(SECTION_SEPARATOR)
+        lines.append(ERROR_MESSAGES.get('data_unavailable', 'Данные недоступны'))
     
     return "\n".join(lines)
 

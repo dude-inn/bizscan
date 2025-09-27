@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 Тесты для новой архитектуры отчётов
 """
@@ -9,6 +9,7 @@ from services.report.builder import ReportBuilder
 from services.report.formatters import format_money, format_date, format_list, format_percent
 from services.report.flattener import flatten, apply_aliases, pick
 from services.aggregator import fetch_company_report_markdown
+import services.aggregator as aggregator
 
 
 class TestNewReportBuilder(unittest.TestCase):
@@ -193,6 +194,9 @@ class TestFlattener(unittest.TestCase):
 
 class TestAggregator(unittest.TestCase):
     """Тесты для агрегатора"""
+
+    def setUp(self):
+        aggregator._builder = None
     
     @patch('services.aggregator.ReportBuilder')
     def test_fetch_company_report_markdown_inn(self, mock_builder_class):
@@ -226,3 +230,6 @@ class TestAggregator(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+

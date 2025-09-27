@@ -4,7 +4,23 @@ Gamma.app integration for company enrichment
 """
 from __future__ import annotations
 from typing import Dict, Any
-from services.enrichment.openai_gamma_enricher import generate_gamma_section
+def generate_gamma_section(company: dict, official_links: list[str]) -> str:
+    """
+    Lightweight placeholder without OpenAI. Returns a minimal Markdown block.
+    """
+    name = company.get("name_full") or company.get("name") or "Компания"
+    inn = company.get("inn") or "—"
+    ogrn = company.get("ogrn") or "—"
+    okved = company.get("okved") or "—"
+    address = company.get("address") or "—"
+    links_md = "\n".join(f"- {u}" for u in official_links[:4]) if official_links else "- Нет ссылок"
+    return (
+        f"## {name}\n"
+        f"ИНН: {inn} | ОГРН: {ogrn}\n\n"
+        f"ОКВЭД: {okved}\n\n"
+        f"Адрес: {address}\n\n"
+        f"Официальные ссылки:\n{links_md}"
+    )
 from services.enrichment.official_sources import build_official_links
 
 def build_gamma_block_for_company(base_company: Dict[str, Any]) -> str:

@@ -5,6 +5,7 @@
 """
 from typing import Dict, Any, List
 from .simple_company_renderer import format_value, format_dict_item
+from .formatters import format_money
 from loguru import logger
 
 
@@ -59,7 +60,7 @@ def render_contracts_simple(data: Dict[str, Any]) -> str:
                                    total_contracts=total_contracts, total_amount=total_amount)
                         
                         lines.append(f"Всего контрактов: {total_contracts}")
-                        lines.append(f"Общая сумма: {total_amount:,.2f} руб.")
+                        lines.append(f"Общая сумма: {format_money(total_amount)}")
                         lines.append("")
                         
                         # Список контрактов (сокращенный формат)
@@ -121,13 +122,10 @@ def render_contracts_simple(data: Dict[str, Any]) -> str:
                                     
                                     # Форматируем цену
                                     price = contract.get('Цена', 0)
-                                    if isinstance(price, (int, float)):
-                                        price_str = f"{price:,.2f}"
-                                    else:
-                                        price_str = str(price)
+                                    price_str = format_money(price) if isinstance(price, (int, float)) else str(price)
                                     
                                     # Сокращенная запись
-                                    contract_line = f"{i}. {contract.get('РегНомер', 'N/A')} | {contract.get('Дата', 'N/A')} | {customer_name} | {supplier_name} | {price_str} руб."
+                                    contract_line = f"{i}. {contract.get('РегНомер', 'N/A')} | {contract.get('Дата', 'N/A')} | {customer_name} | {supplier_name} | {price_str}"
                                     lines.append(contract_line)
                                     logger.debug(f"render_contracts_simple: added contract {i}", 
                                                contract_line=contract_line[:100] + "..." if len(contract_line) > 100 else contract_line)

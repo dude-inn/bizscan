@@ -1,20 +1,19 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 Сборщик отчёта
 """
 import asyncio
 from typing import Dict, Any, List, Optional, Tuple
 from .ofdata_client import OFDataClient
-from .simple_company_renderer import render_company_simple
+from .simple_company_renderer import render_company_simple, load_aliases
 from .simple_finances_renderer import render_finances_simple
 from .render_legal import render_legal
 from .render_enforce import render_enforce
 from .render_inspect import render_inspect
 from .simple_contracts_renderer import render_contracts_simple
 from .render_entrepreneur import render_entrepreneur
+from .render_person import render_person
 from core.logger import setup_logging, get_logger
-
-setup_logging()
 log = get_logger(__name__)
 
 
@@ -24,6 +23,7 @@ class ReportBuilder:
     def __init__(self):
         """Инициализация сборщика"""
         self.client = OFDataClient()
+        self._aliases = load_aliases()
         self.openai_client = None  # Будет инициализирован при необходимости
     
     def build_report(self, query: str, include_sections: List[str] = None) -> str:
@@ -40,23 +40,23 @@ class ReportBuilder:
         if include_sections is None:
             include_sections = ['company', 'finances', 'legal-cases', 'enforcements', 'inspections', 'contracts']
         
-        log.info("ReportBuilder: starting report generation", query=query, sections=include_sections)
+        log.info("ReportBuilder: start", query=query)
         
         try:
             # 1. Получаем данные
-            log.info("Fetching data from API", query=query, sections=include_sections)
+            log.debug("Fetching data from API", query=query, sections=include_sections)
             data = self._fetch_data(query, include_sections)
-            log.info("Data fetched successfully", data_keys=list(data.keys()) if data else None)
+            log.debug("Data fetched", data_keys=list(data.keys()) if data else None)
             
             # 2. Строим отчёт
-            log.info("Building report sections", sections=include_sections)
+            log.debug("Building report sections", sections=include_sections)
             report = self._build_report_sections(data, include_sections)
-            log.info("Report sections built successfully", report_length=len(report) if report else 0)
+            log.debug("Report sections built", report_length=len(report) if report else 0)
             
             # 3. Добавляем OpenAI секции
             full_report = self._add_openai_sections(report)
             
-            log.info("ReportBuilder: report generated successfully", length=len(full_report))
+            log.info("ReportBuilder: done", length=len(full_report))
             return full_report
             
         except Exception as e:
@@ -65,28 +65,28 @@ class ReportBuilder:
     
     def _fetch_data(self, query: str, include_sections: List[str]) -> Dict[str, Any]:
         """Получает данные из OFData API"""
-        log.info("_fetch_data: starting", query=query, sections=include_sections)
+        log.debug("_fetch_data: start", query=query, sections=include_sections)
         data = {}
         
         # Определяем тип запроса и получаем базовую информацию
         if query.isdigit() and len(query) in [10, 12]:
             # ИНН или ОГРН
             if len(query) == 10:
-                log.info("Fetching company by INN", inn=query)
+                log.debug("Fetching company by INN", inn=query)
                 company_data = self.client.get_company(inn=query)
             else:
-                log.info("Fetching company by OGRN", ogrn=query)
+                log.debug("Fetching company by OGRN", ogrn=query)
                 company_data = self.client.get_company(ogrn=query)
             
             # Проверяем, что компания найдена
-            log.debug("_fetch_data: checking company data", 
+            log.debug("_fetch_data: check company data", 
                      has_company_data=bool(company_data),
                      has_data_key=bool(company_data.get('data') if company_data else None))
             if not company_data or not company_data.get('data'):
                 log.warning("Company not found in API response", query=query, response=company_data)
                 raise ValueError("Компания не найдена")
             
-            log.info("Company data fetched successfully", company_keys=list(company_data.keys()) if company_data else None)
+            log.debug("Company data fetched", company_keys=list(company_data.keys()) if company_data else None)
             data['company'] = company_data
         else:
             # Поиск по названию
@@ -184,8 +184,13 @@ class ReportBuilder:
         
         # 1. ОСНОВНОЕ
         if 'company' in data and data['company']:
-            company_info = render_company_simple(data['company'])
-            sections.append(company_info)
+            company_payload = data['company']
+            company_section = render_company_simple(company_payload)
+            sections.append(company_section)
+            company_info = company_payload.get('data', {}) if isinstance(company_payload, dict) else {}
+            relationship_sections = self._build_company_relationship_sections(company_info)
+            if relationship_sections:
+                sections.extend(relationship_sections)
         
         # 2. ФИНАНСОВАЯ ОТЧЁТНОСТЬ
         if 'finances' in include_sections and data.get('finances'):
@@ -217,6 +222,41 @@ class ReportBuilder:
             entrepreneur = render_entrepreneur(data['entrepreneur'])
             sections.append(entrepreneur)
         
+        # 9. ФИЗЛИЦА: руководитель и учредители (если есть ИНН)
+        try:
+            company = data.get('company', {})
+            company_info = company.get('data', {}) if isinstance(company, dict) else {}
+            person_inns = set()
+            # Руководство
+            ruk = company_info.get('Руковод') or {}
+            if isinstance(ruk, dict):
+                inn_ruk = ruk.get('ИНН')
+                if inn_ruk:
+                    person_inns.add(str(inn_ruk))
+            # Учредители — ФЛ
+            uch = company_info.get('Учред') or {}
+            fl_list = None
+            if isinstance(uch, dict):
+                fl_list = uch.get('ФЛ')
+            if isinstance(fl_list, list):
+                for fl in fl_list:
+                    if isinstance(fl, dict) and fl.get('ИНН'):
+                        person_inns.add(str(fl['ИНН']))
+            # Берём до 5 ИНН, чтобы не перегружать отчёт
+            if person_inns:
+                person_sections = []
+                for inn in list(person_inns)[:5]:
+                    try:
+                        person = self.client.get_person(inn=inn)
+                        if person and person.get('data'):
+                            person_sections.append(render_person(person))
+                    except Exception as e:
+                        log.warning("Could not fetch person", inn=inn, error=str(e))
+                if person_sections:
+                    sections.append("\nФИЗИЧЕСКИЕ ЛИЦА (РУКОВОДИТЕЛЬ/УЧРЕДИТЕЛИ)\n" + "=" * 50 + "\n" + "\n\n".join(person_sections))
+        except Exception as e:
+            log.warning("person-section: error", error=str(e))
+        
         # Объединяем все секции
         report_text = "\n\n".join(sections)
         
@@ -225,11 +265,161 @@ class ReportBuilder:
         
         return report_text
     
+    
+    def summarize_history_and_bullets(self, report_text: str) -> Tuple[str, str]:
+        '''Возвращает краткую историю и маркированный список по тексту отчёта.'''
+        if not report_text:
+            return "", ""
+
+        lines = [line.strip() for line in report_text.splitlines() if line.strip()]
+        if not lines:
+            return "", ""
+
+        title = lines[0]
+        history_parts: List[str] = [title]
+        bullet_lines: List[str] = []
+
+        for line in lines[1:]:
+            if set(line) == {'='}:
+                continue
+            if line.lower().startswith('основное'):
+                continue
+            normalized = line.lower()
+            if (
+                ':' in line
+                or '•' in line
+                or any(key in normalized for key in ("инн", "огрн", "регион", "руковод", "выруч", "прибыл"))
+            ):
+                history_parts.append(line)
+                bullet_text = line if line.startswith('•') else f"• {line}"
+                bullet_lines.append(bullet_text)
+            if len(bullet_lines) >= 5:
+                break
+
+        history = "\n".join(history_parts)
+        bullets = "\n".join(bullet_lines) if bullet_lines else "• Нет ключевых фактов"
+        return history, bullets
+
     def _add_openai_sections(self, report_text: str) -> str:
         """Отключено: возвращаем исходный отчёт без секций OpenAI"""
         log.info("_add_openai_sections: disabled — returning report without OpenAI sections")
         return report_text
-    
+
+    def _build_company_relationship_sections(self, company_info: Dict[str, Any]) -> List[str]:
+        sections: List[str] = []
+        if not isinstance(company_info, dict):
+            return sections
+        founders_section = self._render_founders_section(company_info.get('Учред'))
+        if founders_section:
+            sections.append(founders_section)
+        related_section = self._render_related_companies_section(company_info.get('СвязУчред'))
+        if related_section:
+            sections.append(related_section)
+        leadership_section = self._render_leadership_section(company_info.get('Руковод'))
+        if leadership_section:
+            sections.append(leadership_section)
+        return sections
+
+    def _render_founders_section(self, founders_data: Any) -> Optional[str]:
+        if not founders_data:
+            return None
+        lines: List[str] = []
+        if isinstance(founders_data, dict):
+            categories = [
+                ("Физические лица", "ФЛ"),
+                ("Российские организации", "РосОрг"),
+                ("Иностранные организации", "ИнОрг"),
+                ("ПИФы", "ПИФ"),
+                ("Государство/муниципалитеты", "РФ"),
+            ]
+            handled_keys = set()
+            for title, key in categories:
+                handled_keys.add(key)
+                items = self._collect_items(founders_data.get(key))
+                if not items:
+                    continue
+                lines.append(f"{title}:")
+                lines.extend(self._format_dict_list(items, indent="  "))
+                lines.append("")
+            for key, value in founders_data.items():
+                if key in handled_keys:
+                    continue
+                items = self._collect_items(value)
+                if not items:
+                    continue
+                title = self._aliases.get(f"Учред.{key}", self._aliases.get(key, key))
+                lines.append(f"{title}:")
+                lines.extend(self._format_dict_list(items, indent="  "))
+                lines.append("")
+        else:
+            items = self._collect_items(founders_data)
+            if items:
+                lines.extend(self._format_dict_list(items))
+        lines = self._trim_trailing_blank_lines(lines)
+        if not lines:
+            return None
+        return "УЧРЕДИТЕЛИ\n" + "=" * 50 + "\n" + "\n".join(lines)
+
+    def _render_related_companies_section(self, related_data: Any) -> Optional[str]:
+        items = self._collect_items(related_data)
+        if not items:
+            return None
+        lines = self._trim_trailing_blank_lines(self._format_dict_list(items))
+        if not lines:
+            return None
+        return "СВЯЗАННЫЕ КОМПАНИИ\n" + "=" * 50 + "\n" + "\n".join(lines)
+
+    def _render_leadership_section(self, leadership_data: Any) -> Optional[str]:
+        items = self._collect_items(leadership_data)
+        if not items:
+            return None
+        lines = self._trim_trailing_blank_lines(self._format_dict_list(items, max_items=10))
+        if not lines:
+            return None
+        return "РУКОВОДСТВО\n" + "=" * 50 + "\n" + "\n".join(lines)
+
+    def _collect_items(self, value: Any) -> List[Any]:
+        if isinstance(value, list):
+            return [item for item in value if item not in (None, {}, [])]
+        if isinstance(value, dict):
+            collected: List[Any] = []
+            for sub in value.values():
+                if isinstance(sub, list):
+                    collected.extend(item for item in sub if item not in (None, {}, []))
+            if collected:
+                return collected
+            return [value]
+        if value not in (None, "", [], {}):
+            return [value]
+        return []
+
+    def _format_dict_list(self, items: List[Any], indent: str = "", max_items: int = 20) -> List[str]:
+        lines: List[str] = []
+        if not items:
+            return lines
+        trimmed = [item for item in items if item not in (None, {}, [])]
+        if not trimmed:
+            return lines
+        limited = trimmed[:max_items]
+        for item in limited:
+            entry = self._format_dict_entry(item)
+            if entry:
+                lines.append(f"{indent}• {entry}")
+        if len(trimmed) > max_items:
+            lines.append(f"{indent}• … и ещё {len(trimmed) - max_items} записей")
+        return lines
+
+    def _format_dict_entry(self, item: Any) -> str:
+        if isinstance(item, dict):
+            return format_dict_item(item, self._aliases).strip()
+        return str(item).strip()
+
+    def _trim_trailing_blank_lines(self, lines: List[str]) -> List[str]:
+        result = list(lines)
+        while result and not result[-1].strip():
+            result.pop()
+        return result
+
     def build_company_profile(self, query: str) -> Dict[str, Any]:
         """
         Строит профиль компании (для совместимости с bot/)
@@ -293,7 +483,7 @@ class ReportBuilder:
             company_info = company_data.get('data', company_data)
             
             # 3. Загружаем дополнительные данные
-            log.info("build_simple_report: loading additional data", include=include)
+            log.debug("build_simple_report: loading additional data", include=include)
             
             # Загружаем финансы
             if 'finances' in include:
@@ -301,7 +491,7 @@ class ReportBuilder:
                     finances_data = self.client.get_finances(**ident)
                     if finances_data:
                         company_data['finances'] = finances_data
-                        log.info("build_simple_report: finances loaded")
+                        log.debug("build_simple_report: finances loaded")
                 except Exception as e:
                     log.warning("Could not load finances", error=str(e))
             
@@ -311,7 +501,7 @@ class ReportBuilder:
                     legal_data = self.client.get_legal_cases(**ident)
                     if legal_data:
                         company_data['legal_cases'] = legal_data
-                        log.info("build_simple_report: legal cases loaded")
+                        log.debug("build_simple_report: legal cases loaded")
                 except Exception as e:
                     log.warning("Could not load legal cases", error=str(e))
             
@@ -321,7 +511,7 @@ class ReportBuilder:
                     enforce_data = self.client.get_enforcements(**ident)
                     if enforce_data:
                         company_data['enforcements'] = enforce_data
-                        log.info("build_simple_report: enforcements loaded")
+                        log.debug("build_simple_report: enforcements loaded")
                 except Exception as e:
                     log.warning("Could not load enforcements", error=str(e))
             
@@ -331,7 +521,7 @@ class ReportBuilder:
                     inspect_data = self.client.get_inspections(**ident)
                     if inspect_data:
                         company_data['inspections'] = inspect_data
-                        log.info("build_simple_report: inspections loaded")
+                        log.debug("build_simple_report: inspections loaded")
                 except Exception as e:
                     log.warning("Could not load inspections", error=str(e))
             
@@ -375,7 +565,7 @@ class ReportBuilder:
                     
                     if contracts_data:
                         company_data['contracts'] = contracts_data
-                        log.info("build_simple_report: contracts loaded", contracts_keys=list(contracts_data.keys()))
+                        log.debug("build_simple_report: contracts loaded", contracts_keys=list(contracts_data.keys()))
                 except Exception as e:
                     log.warning("Could not load contracts", error=str(e))
             
@@ -387,9 +577,43 @@ class ReportBuilder:
             
             # ОСНОВНОЕ
             if 'company' in include:
-                from .simple_company_renderer import render_company_simple
+                from .simple_company_renderer import render_company_simple, load_aliases
                 company_section = render_company_simple(company_info)
                 sections.append(company_section)
+                # ФИЗЛИЦА (руководитель и учредители)
+                try:
+                    from .render_person import render_person
+                    person_inns = set()
+                    ruk = company_info.get('Руковод')
+                    # Руковод может быть dict или list
+                    if isinstance(ruk, dict):
+                        inn_ruk = ruk.get('ИНН')
+                        if inn_ruk:
+                            person_inns.add(str(inn_ruk))
+                    elif isinstance(ruk, list):
+                        for item in ruk:
+                            if isinstance(item, dict) and item.get('ИНН'):
+                                person_inns.add(str(item['ИНН']))
+                    uch = company_info.get('Учред') or {}
+                    fl_list = uch.get('ФЛ') if isinstance(uch, dict) else None
+                    if isinstance(fl_list, list):
+                        for fl in fl_list:
+                            if isinstance(fl, dict) and fl.get('ИНН'):
+                                person_inns.add(str(fl['ИНН']))
+                    # Ограничим до 5 профилей
+                    if person_inns:
+                        person_blocks = []
+                        for inn in list(person_inns)[:5]:
+                            try:
+                                person = self.client.get_person(inn=inn)
+                                if person and person.get('data'):
+                                    person_blocks.append(render_person(person))
+                            except Exception as e:
+                                log.warning("build_simple_report: person fetch failed", inn=inn, error=str(e))
+                        if person_blocks:
+                            sections.append("ФИЗИЧЕСКИЕ ЛИЦА (РУКОВОДИТЕЛЬ/УЧРЕДИТЕЛИ)\n" + "=" * 50 + "\n" + "\n\n".join(person_blocks))
+                except Exception as e:
+                    log.warning("build_simple_report: person section error", error=str(e))
             
             # НАЛОГИ
             if 'taxes' in include:
@@ -421,6 +645,14 @@ class ReportBuilder:
                             name = tax.get('Наим', '—')
                             amount = tax.get('Сумма', 0)
                             tax_lines.append(f"• {name}: {format_money(amount)}")
+                        # Полный список (в человекочитаемом виде)
+                        tax_lines.append("")
+                        tax_lines.append("Все уплаченные налоги (полный список):")
+                        for tax in sorted_taxes:
+                            name = tax.get('Наим', '—')
+                            amount = tax.get('Сумма', 0)
+                            year = tax.get('Год') or taxes_data.get('СведУплГод') or '—'
+                            tax_lines.append(f"• {year}: {name} — {format_money(amount)}")
                     
                     # Недоимка
                     arrears = taxes_data.get('СумНедоим', 0)
@@ -501,22 +733,7 @@ class ReportBuilder:
             # 4. Собираем полный текст
             full_text = "\n\n".join(sections)
             
-            # 5. Добавляем OpenAI секции (только основные данные)
-            try:
-                # Извлекаем только основные данные компании для OpenAI
-                company_name = company_info.get('НаимПолн', company_info.get('НаимСокр', 'Не указано'))
-                inn = company_info.get('ИНН', 'Не указан')
-                address = company_info.get('ЮрАдрес', company_info.get('Адрес', 'Не указан'))
-                
-                # Создаем краткий текст только с основными данными
-                basic_data = f"НАЗВАНИЕ: {company_name}\nИНН: {inn}\nАДРЕС: {address}"
-                
-                history, bullets = self.summarize_history_and_bullets(basic_data)
-                # Добавляем секции к отчёту
-                full_text += f"\n\nИСТОРИЯ КОМПАНИИ\n{'=' * 50}\n{history}\n\nРЕЗЮМЕ\n{'=' * 50}\n{bullets}"
-            except Exception as e:
-                log.warning("Could not generate OpenAI sections", error=str(e))
-                full_text += f"\n\nИСТОРИЯ КОМПАНИИ\n{'=' * 50}\nДанные недоступны\n\nРЕЗЮМЕ\n{'=' * 50}\nДанные недоступны"
+            # 5. OpenAI секции отключены
             
             return full_text
             
@@ -524,45 +741,12 @@ class ReportBuilder:
             log.error("ReportBuilder: error building simple report", error=str(e), ident=ident)
             return f"❌ Ошибка при формировании отчёта: {str(e)}"
     
-    def summarize_history_and_bullets(self, full_text: str) -> Tuple[str, str]:
-        """
-        Генерирует историю компании и резюме с помощью OpenAI
-        
-        Args:
-            full_text: Полный текст отчёта
-            
-        Returns:
-            Кортеж (история, резюме)
-        """
-        try:
-            # Используем OpenAI для генерации
-            from services.providers.openai_provider import OpenAIProvider
-            
-            openai_provider = OpenAIProvider()
-            
-            # Генерируем историю и резюме асинхронно
-            import asyncio
-            
-            async def generate_sections():
-                history = await openai_provider.generate_company_history(full_text)
-                summary = await openai_provider.generate_company_summary(full_text)
-                return history, summary
-            
-            # Запускаем асинхронную генерацию
-            try:
-                # Проверяем, есть ли уже запущенный event loop
-                loop = asyncio.get_running_loop()
-                # Если есть, создаем задачу
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, generate_sections())
-                    history, summary = future.result()
-            except RuntimeError:
-                # Если нет запущенного loop, создаем новый
-                history, summary = asyncio.run(generate_sections())
-            
-            return history, summary
-                
-        except Exception as e:
-            log.warning("Could not generate sections with OpenAI", error=str(e))
-            return "Данные недоступны", "Данные недоступны"
+    # OpenAI summarization disabled: method removed
+
+
+
+
+
+
+
+
